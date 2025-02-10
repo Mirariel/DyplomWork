@@ -1,0 +1,23 @@
+# Environment
+.env
+
+# Build artifacts
+bin/
+*.exe
+*.test
+
+# Storage
+storage/
+
+# IDE
+.idea/
+
+# AI assistant files
+CLAUDE.md
+PROBLEMS.md
+memory/
+MEMORY.md
+
+# OS
+.DS_Store
+Thumbs.db
