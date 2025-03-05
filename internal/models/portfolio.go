@@ -1,0 +1,179 @@
+package models
+
+import (
+	"time"
+
+	"github.com/jmoiron/sqlx"
+)
+
+// Asset — визначення активу (монети)
+type Asset struct {
+	ID              int64      `db:"id"               json:"id"`
+	Symbol          string     `db:"symbol"           json:"symbol"`
+	Name            string     `db:"name"             json:"name"`
+	Type            string     `db:"type"             json:"type"`
+	CurrentPrice    float64    `db:"current_price"    json:"current_price"`
+	PriceUpdatedAt  *time.Time `db:"price_updated_at" json:"price_updated_at"`
+	CreatedAt       time.Time  `db:"created_at"       json:"created_at"`
+}
+
+// UserPortfolio — спот-баланс користувача на конкретній біржі
+type UserPortfolio struct {
+	ID          int64     `db:"id"            json:"id"`
+	UserID      int64     `db:"user_id"       json:"user_id"`
+	AssetID     int64     `db:"asset_id"      json:"asset_id"`
+	Exchange    string    `db:"exchange"      json:"exchange"`
+	Quantity    float64   `db:"quantity"      json:"quantity"`
+	AvgBuyPrice float64   `db:"avg_buy_price" json:"avg_buy_price"`
+	ManuallySet bool      `db:"manually_set"  json:"manually_set"`
+	UpdatedAt   time.Time `db:"updated_at"    json:"updated_at"`
+
+	// Joined з assets
+	Symbol       string  `db:"symbol"        json:"symbol"`
+	CurrentPrice float64 `db:"current_price" json:"current_price"`
+}
+
+// OpenPosition — відкрита ф'ючерсна/маржинальна позиція
+type OpenPosition struct {
+	ID         int64     `db:"id"          json:"id"`
+	UserID     int64     `db:"user_id"     json:"user_id"`
+	AssetID    int64     `db:"asset_id"    json:"asset_id"`
+	Symbol     string    `db:"symbol"      json:"symbol"`
+	Exchange   string    `db:"exchange"    json:"exchange"`
+	Side       string    `db:"side"        json:"side"`
+	MarginMode string    `db:"margin_mode" json:"margin_mode"`
+	EntryPrice float64   `db:"entry_price" json:"entry_price"`
+	MarkPrice  float64   `db:"mark_price"  json:"mark_price"`
+	Quantity   float64   `db:"quantity"    json:"quantity"`
+	PnL        float64   `db:"pnl"         json:"pnl"`
+	Leverage   string    `db:"leverage"    json:"leverage"`  // "10x"
+	LiqPrice   float64   `db:"liq_price"   json:"liq_price"`
+	Margin     float64   `db:"margin"      json:"margin"`
+	TradeSize  float64   `db:"trade_size"  json:"trade_size"`
+	Comment    *string   `db:"comment"     json:"comment"`
+	UpdatedAt  time.Time `db:"updated_at"  json:"updated_at"`
+}
+
+// PositionHistory — закрита угода (архів)
+type PositionHistory struct {
+	ID          int64    `db:"id"           json:"id"`
+	UserID      int64    `db:"user_id"      json:"user_id"`
+	Symbol      string   `db:"symbol"       json:"symbol"`
+	Exchange    string   `db:"exchange"     json:"exchange"`
+	Side        string   `db:"side"         json:"side"`
+	MarginMode  string   `db:"margin_mode"  json:"margin_mode"`
+	Leverage    string   `db:"leverage"     json:"leverage"`
+	EntryPrice  float64  `db:"entry_price"  json:"entry_price"`
+	ExitPrice   float64  `db:"exit_price"   json:"exit_price"`
+	Quantity    float64  `db:"quantity"     json:"quantity"`
+	RealizedPnl float64  `db:"realized_pnl" json:"realized_pnl"`
+	Fee         float64  `db:"fee"          json:"fee"`
+	MaxSize     float64  `db:"max_size"     json:"max_size"`
+	OpenedAt    *string  `db:"opened_at"    json:"opened_at"`
+	ClosedAt    *string  `db:"closed_at"    json:"closed_at"`
+	Comment     *string  `db:"comment"      json:"comment"`
+	CreatedAt   string   `db:"created_at"   json:"created_at"`
+}
+
+// ExternalApiCredential — зашифровані API-ключі біржі
+type ExternalApiCredential struct {
+	ID                  int64      `db:"id"                    json:"id"`
+	UserID              int64      `db:"user_id"               json:"user_id"`
+	Exchange            string     `db:"exchange"              json:"exchange"`
+	ApiKeyEncrypted     string     `db:"api_key_encrypted"     json:"-"`
+	ApiSecretEncrypted  string     `db:"api_secret_encrypted"  json:"-"`
+	PassphraseEncrypted *string    `db:"passphrase_encrypted"  json:"-"`
+	IsActive            bool       `db:"is_active"             json:"is_active"`
+	LastSyncAt          *time.Time `db:"last_sync_at"          json:"last_sync_at"`
+	LastSyncError       *string    `db:"last_sync_error"       json:"last_sync_error"`
+	CreatedAt           time.Time  `db:"created_at"            json:"created_at"`
+	UpdatedAt           time.Time  `db:"updated_at"            json:"updated_at"`
+}
+
+// --- Repositories ---
+
+type PortfolioRepository struct {
+	db *sqlx.DB
+}
+
+func NewPortfolioRepository(db *sqlx.DB) *PortfolioRepository {
+	return &PortfolioRepository{db: db}
+}
+
+func (r *PortfolioRepository) GetUserAssets(userID int64) ([]UserPortfolio, error) {
+	var items []UserPortfolio
+	err := r.db.Select(&items, `
+		SELECT
+			up.id, up.user_id, up.asset_id, up.exchange,
+			up.quantity, up.avg_buy_price, up.manually_set, up.updated_at,
+			a.symbol, a.current_price
+		FROM user_portfolios up
+		JOIN assets a ON a.id = up.asset_id
+		WHERE up.user_id = ? AND up.quantity > 0
+		ORDER BY (up.quantity * a.current_price) DESC
+	`, userID)
+	return items, err
+}
+
+func (r *PortfolioRepository) GetOpenPositions(userID int64) ([]OpenPosition, error) {
+	var items []OpenPosition
+	err := r.db.Select(&items,
+		`SELECT * FROM open_positions WHERE user_id = ? ORDER BY updated_at DESC`,
+		userID)
+	return items, err
+}
+
+func (r *PortfolioRepository) GetHistory(userID int64, limit, offset int) ([]PositionHistory, error) {
+	var items []PositionHistory
+	err := r.db.Select(&items,
+		`SELECT * FROM position_history WHERE user_id = ? ORDER BY closed_at DESC LIMIT ? OFFSET ?`,
+		userID, limit, offset)
+	return items, err
+}
+
+func (r *PortfolioRepository) GetCredentials(userID int64) ([]ExternalApiCredential, error) {
+	var items []ExternalApiCredential
+	err := r.db.Select(&items,
+		`SELECT * FROM external_api_credentials WHERE user_id = ? AND is_active = 1`,
+		userID)
+	return items, err
+}
+
+func (r *PortfolioRepository) UpsertCredential(cred *ExternalApiCredential) error {
+	_, err := r.db.NamedExec(`
+		INSERT INTO external_api_credentials
+			(user_id, exchange, api_key_encrypted, api_secret_encrypted, passphrase_encrypted, is_active)
+		VALUES
+			(:user_id, :exchange, :api_key_encrypted, :api_secret_encrypted, :passphrase_encrypted, :is_active)
+		ON DUPLICATE KEY UPDATE
+			api_key_encrypted    = VALUES(api_key_encrypted),
+			api_secret_encrypted = VALUES(api_secret_encrypted),
+			passphrase_encrypted = VALUES(passphrase_encrypted),
+			is_active            = VALUES(is_active)
+	`, cred)
+	return err
+}
+
+func (r *PortfolioRepository) DeleteCredential(id, userID int64) error {
+	_, err := r.db.Exec(
+		"DELETE FROM external_api_credentials WHERE id = ? AND user_id = ?",
+		id, userID,
+	)
+	return err
+}
+
+func (r *PortfolioRepository) UpdatePositionComment(id, userID int64, comment *string) error {
+	_, err := r.db.Exec(
+		"UPDATE open_positions SET comment = ? WHERE id = ? AND user_id = ?",
+		comment, id, userID,
+	)
+	return err
+}
+
+func (r *PortfolioRepository) UpdateHistoryComment(id, userID int64, comment *string) error {
+	_, err := r.db.Exec(
+		"UPDATE position_history SET comment = ? WHERE id = ? AND user_id = ?",
+		comment, id, userID,
+	)
+	return err
+}
