@@ -1,7 +1,7 @@
 package config
 
 import (
-	"log"
+	"log/slog"
 	"os"
 	"strconv"
 
@@ -9,9 +9,9 @@ import (
 )
 
 type Config struct {
-	AppPort    string
-	AppDebug   bool
-	JWTSecret  string
+	AppPort   string
+	AppDebug  bool
+	JWTSecret string
 
 	DBHost     string
 	DBPort     string
@@ -19,13 +19,17 @@ type Config struct {
 	DBPassword string
 	DBName     string
 
-	EncryptionKey  string
-	AnthropicKey   string
+	EncryptionKey string
+	AnthropicKey  string
+
+	// RedisURL — необов'язковий. Якщо порожній — використовується in-memory cache.
+	// Формат: "localhost:6379" або "redis://:password@host:6379/0"
+	RedisURL string
 }
 
 func Load() *Config {
 	if err := godotenv.Load(); err != nil {
-		log.Println("No .env file found, using environment variables")
+		slog.Warn("No .env file found, using environment variables")
 	}
 
 	return &Config{
@@ -41,6 +45,7 @@ func Load() *Config {
 
 		EncryptionKey: getEnv("APP_KEY", ""),
 		AnthropicKey:  getEnv("ANTHROPIC_API_KEY", ""),
+		RedisURL:      getEnv("REDIS_URL", ""),
 	}
 }
 

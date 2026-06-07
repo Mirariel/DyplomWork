@@ -1,75 +1,37 @@
 package services
 
 import (
-	"log"
+	"log/slog"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/jmoiron/sqlx"
+	"github.com/okochadmytro/tradetracker/internal/cache"
 	"github.com/okochadmytro/tradetracker/internal/services/exchange"
 )
 
-// priceCache — in-memory кеш цін із TTL
-type priceCache struct {
-	mu        sync.RWMutex
-	prices    map[string]float64
-	updatedAt time.Time
-	ttl       time.Duration
-}
-
-func newPriceCache(ttl time.Duration) *priceCache {
-	return &priceCache{
-		prices: make(map[string]float64),
-		ttl:    ttl,
-	}
-}
-
-func (c *priceCache) get() (map[string]float64, bool) {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
-	if time.Since(c.updatedAt) > c.ttl {
-		return nil, false
-	}
-	// Повертаємо копію щоб не блокувати
-	cp := make(map[string]float64, len(c.prices))
-	for k, v := range c.prices {
-		cp[k] = v
-	}
-	return cp, true
-}
-
-func (c *priceCache) set(prices map[string]float64) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.prices = prices
-	c.updatedAt = time.Now()
-}
+const priceTTL = 30 * time.Second
 
 // PriceService — отримує актуальні ціни з бірж і оновлює таблицю assets.
-// Ціни кешуються в пам'яті на 30 секунд (паралельний fetch з усіх 3 бірж).
+// Ціни кешуються через cache.PriceStorer (memory або Redis — залежить від DI).
 type PriceService struct {
 	db        *sqlx.DB
 	exchanges map[string]exchange.Exchange
-	caches    map[string]*priceCache
-	logger    *log.Logger
+	cache     cache.PriceStorer
+	logger    *slog.Logger
 }
 
-func NewPriceService(db *sqlx.DB, logger *log.Logger) *PriceService {
-	exchanges := exchange.Registry()
-	caches := make(map[string]*priceCache, len(exchanges))
-	for name := range exchanges {
-		caches[name] = newPriceCache(30 * time.Second)
-	}
+func NewPriceService(db *sqlx.DB, store cache.PriceStorer, logger *slog.Logger) *PriceService {
 	return &PriceService{
 		db:        db,
-		exchanges: exchanges,
-		caches:    caches,
+		exchanges: exchange.Registry(),
+		cache:     store,
 		logger:    logger,
 	}
 }
 
-// UpdatePrices — оновлює current_price для переданих символів.
+// UpdatePrices оновлює current_price для переданих символів.
 // Ціни беруться паралельно з усіх бірж, пріоритет: Binance → OKX → Bybit.
 func (ps *PriceService) UpdatePrices(symbols []string) error {
 	if len(symbols) == 0 {
@@ -92,18 +54,25 @@ func (ps *PriceService) UpdatePrices(symbols []string) error {
 
 	for _, sym := range symbols {
 		search := strings.ReplaceAll(sym, "-", "")
-
 		if stables[search] {
 			stmt.Exec(1.0, sym)
 			continue
 		}
-
-		price := ps.resolvePrice(search, allPrices)
-		if price > 0 {
+		if price := ps.resolvePrice(search, allPrices); price > 0 {
 			stmt.Exec(price, sym)
 		}
 	}
 	return nil
+}
+
+// UpdateAllAssets оновлює ціни для всіх символів що є в таблиці assets.
+// Використовується фоновим scheduler'ом.
+func (ps *PriceService) UpdateAllAssets() error {
+	var symbols []string
+	if err := ps.db.Select(&symbols, "SELECT DISTINCT symbol FROM assets"); err != nil {
+		return err
+	}
+	return ps.UpdatePrices(symbols)
 }
 
 // GetLivePrices повертає поточні ціни для набору символів без запису в БД.
@@ -129,8 +98,8 @@ func (ps *PriceService) GetLivePrices(symbols []string) map[string]float64 {
 	return result
 }
 
-// fetchAllPrices — паралельно отримує ціни з усіх бірж, кешує на 30 с.
-// Повертає map[exchangeName]map[symbol]price
+// fetchAllPrices — паралельно отримує ціни з усіх бірж через cache.PriceStorer.
+// Повертає map[exchangeName]map[symbol]price.
 func (ps *PriceService) fetchAllPrices() map[string]map[string]float64 {
 	type result struct {
 		name   string
@@ -141,8 +110,7 @@ func (ps *PriceService) fetchAllPrices() map[string]map[string]float64 {
 	var wg sync.WaitGroup
 
 	for name, ex := range ps.exchanges {
-		// Спочатку перевіряємо кеш
-		if cached, ok := ps.caches[name].get(); ok {
+		if cached, ok := ps.cache.Get(name); ok {
 			ch <- result{name: name, prices: cached}
 			continue
 		}
@@ -152,10 +120,10 @@ func (ps *PriceService) fetchAllPrices() map[string]map[string]float64 {
 			defer wg.Done()
 			prices, err := ex.GetPrices(nil)
 			if err != nil {
-				ps.logger.Printf("[prices] fetch error %s: %v", name, err)
+				ps.logger.Error("prices: fetch error", "exchange", name, "error", err)
 				prices = make(map[string]float64)
 			}
-			ps.caches[name].set(prices)
+			ps.cache.Set(name, prices, priceTTL)
 			ch <- result{name: name, prices: prices}
 		}(name, ex)
 	}
@@ -170,10 +138,9 @@ func (ps *PriceService) fetchAllPrices() map[string]map[string]float64 {
 	return all
 }
 
-// resolvePrice — пріоритет Binance → OKX → Bybit
+// resolvePrice — пріоритет Binance → OKX → Bybit.
 func (ps *PriceService) resolvePrice(symbol string, all map[string]map[string]float64) float64 {
 	priority := []string{"binance", "okx", "bybit"}
-
 	for _, name := range priority {
 		prices := all[name]
 		if p, ok := prices[symbol+"USDT"]; ok && p > 0 {
