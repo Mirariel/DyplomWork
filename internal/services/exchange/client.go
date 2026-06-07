@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 )
@@ -82,6 +83,36 @@ func postJSON(url string, body string, headers map[string]string, dest interface
 			return nil, err
 		}
 		req.Header.Set("Content-Type", "application/json")
+		for k, v := range headers {
+			req.Header.Set(k, v)
+		}
+		return req, nil
+	}, dest)
+}
+
+// deleteJSON — DELETE запит з заголовками (Binance cancel order)
+func deleteJSON(endpoint string, headers map[string]string, dest interface{}) error {
+	return doRequest(func() (*http.Request, error) {
+		req, err := http.NewRequest(http.MethodDelete, endpoint, nil)
+		if err != nil {
+			return nil, err
+		}
+		for k, v := range headers {
+			req.Header.Set(k, v)
+		}
+		return req, nil
+	}, dest)
+}
+
+// postForm — POST з application/x-www-form-urlencoded body і заголовками (Kraken)
+func postForm(endpoint string, params url.Values, headers map[string]string, dest interface{}) error {
+	encoded := params.Encode()
+	return doRequest(func() (*http.Request, error) {
+		req, err := http.NewRequest(http.MethodPost, endpoint, strings.NewReader(encoded))
+		if err != nil {
+			return nil, err
+		}
+		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 		for k, v := range headers {
 			req.Header.Set(k, v)
 		}
