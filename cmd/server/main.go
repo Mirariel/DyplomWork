@@ -1,55 +1,113 @@
 package main
 
 import (
-	"log"
+	"context"
+	"log/slog"
 	"os"
+	"os/signal"
+	"syscall"
+	"time"
 
 	"github.com/gofiber/fiber/v2"
 	"github.com/gofiber/fiber/v2/middleware/cors"
+	"github.com/gofiber/fiber/v2/middleware/limiter"
 	"github.com/gofiber/fiber/v2/middleware/recover"
 	fiberws "github.com/gofiber/websocket/v2"
+	goredis "github.com/redis/go-redis/v9"
+	"github.com/okochadmytro/tradetracker/internal/cache"
 	"github.com/okochadmytro/tradetracker/internal/config"
 	"github.com/okochadmytro/tradetracker/internal/database"
 	"github.com/okochadmytro/tradetracker/internal/handlers"
 	"github.com/okochadmytro/tradetracker/internal/middleware"
 	"github.com/okochadmytro/tradetracker/internal/models"
+	"github.com/okochadmytro/tradetracker/internal/scheduler"
 	"github.com/okochadmytro/tradetracker/internal/services"
 	"github.com/okochadmytro/tradetracker/internal/ws"
 )
 
 func main() {
 	cfg := config.Load()
-	logger := log.New(os.Stdout, "", log.LstdFlags)
+
+	// Logger: JSON у prod, human-readable text у dev
+	var logHandler slog.Handler
+	if cfg.AppDebug {
+		logHandler = slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelDebug})
+	} else {
+		logHandler = slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo})
+	}
+	logger := slog.New(logHandler)
 
 	db, err := database.Connect(cfg)
 	if err != nil {
-		log.Fatalf("DB connection failed: %v", err)
+		logger.Error("DB connection failed", "error", err)
+		os.Exit(1)
 	}
 	defer db.Close()
-	logger.Println("Database connected")
+	logger.Info("Database connected")
 
 	enc, err := services.NewEncryptionService(cfg.EncryptionKey)
 	if err != nil {
-		log.Fatalf("Encryption service: %v", err)
+		logger.Error("Encryption service init failed", "error", err)
+		os.Exit(1)
+	}
+
+	// Cache: автоматично вибирає Redis якщо REDIS_URL задано, інакше in-memory.
+	// Щоб увімкнути Redis: додати REDIS_URL=localhost:6379 в .env
+	var priceStore cache.PriceStorer
+	if cfg.RedisURL != "" {
+		redisClient := goredis.NewClient(&goredis.Options{Addr: cfg.RedisURL})
+		priceStore = cache.NewRedisPriceStore(redisClient)
+		logger.Info("price cache: Redis", "url", cfg.RedisURL)
+	} else {
+		priceStore = cache.NewMemoryPriceStore()
+		logger.Info("price cache: in-memory")
 	}
 
 	// Services
 	syncService := services.NewSyncService(db, enc, logger)
-	priceService := services.NewPriceService(db, logger)
+	priceService := services.NewPriceService(db, priceStore, logger)
 
 	// Repositories
 	userRepo := models.NewUserRepository(db)
 	portfolioRepo := models.NewPortfolioRepository(db)
+	orderRepo := models.NewOrderRepository(db)
 
 	// WebSocket
 	hub := ws.NewHub()
 	wsServer := ws.NewServer(hub, db, enc, priceService, cfg.JWTSecret, logger)
-	go wsServer.Run() // broadcast loop
+
+	// Контекст для WS broadcast loop і scheduler
+	ctx, cancel := context.WithCancel(context.Background())
+
+	go wsServer.Run(ctx)
+
+	// Background scheduler
+	sched := scheduler.New(logger)
+	sched.Register(
+		scheduler.Job{
+			Name:     "prices",
+			Interval: 30 * time.Second,
+			Fn: func(ctx context.Context) {
+				if err := priceService.UpdateAllAssets(); err != nil {
+					logger.Error("scheduler: update prices failed", "error", err)
+				}
+			},
+		},
+		scheduler.Job{
+			Name:     "sync-all-users",
+			Interval: 15 * time.Minute,
+			Fn: func(ctx context.Context) {
+				syncService.SyncAllUsers()
+			},
+		},
+	)
+	sched.Start(ctx)
 
 	// Handlers
 	authHandler := handlers.NewAuthHandler(userRepo, cfg.JWTSecret)
 	portfolioHandler := handlers.NewPortfolioHandler(portfolioRepo, enc)
 	syncHandler := handlers.NewSyncHandler(syncService, priceService, portfolioRepo)
+	orderHandler := handlers.NewOrderHandler(orderRepo, portfolioRepo, enc, logger)
 
 	// App
 	app := fiber.New(fiber.Config{
@@ -70,8 +128,23 @@ func main() {
 		AllowCredentials: true,
 	}))
 
+	// --- Rate limiter для auth ---
+	authLimiter := limiter.New(limiter.Config{
+		Max:        10,
+		Expiration: 1 * time.Minute,
+		KeyGenerator: func(c *fiber.Ctx) string {
+			return c.IP()
+		},
+		LimitReached: func(c *fiber.Ctx) error {
+			return c.Status(fiber.StatusTooManyRequests).JSON(fiber.Map{
+				"error": "too many requests, try again in a minute",
+			})
+		},
+	})
+
 	// --- Public routes ---
 	auth := app.Group("/api/auth")
+	auth.Use(authLimiter)
 	auth.Post("/register", authHandler.Register)
 	auth.Post("/login", authHandler.Login)
 	auth.Post("/logout", authHandler.Logout)
@@ -81,7 +154,7 @@ func main() {
 
 	api.Get("/auth/me", authHandler.Me)
 
-	// Portfolio (read)
+	// Portfolio
 	portfolio := api.Group("/portfolio")
 	portfolio.Get("/", portfolioHandler.GetPortfolio)
 	portfolio.Get("/history", portfolioHandler.GetHistory)
@@ -100,7 +173,13 @@ func main() {
 	syncGroup.Post("/history", syncHandler.SyncHistory)
 	syncGroup.Get("/prices", syncHandler.UpdatePrices)
 
-	// WebSocket — upgrade check перед handler
+	// Orders
+	api.Post("/orders", orderHandler.PlaceOrder)
+	api.Get("/orders", orderHandler.ListOrders)
+	api.Get("/orders/:id", orderHandler.GetOrder)
+	api.Delete("/orders/:id", orderHandler.CancelOrder)
+
+	// WebSocket
 	app.Use("/ws", func(c *fiber.Ctx) error {
 		if fiberws.IsWebSocketUpgrade(c) {
 			return c.Next()
@@ -114,8 +193,23 @@ func main() {
 		return c.JSON(fiber.Map{"status": "ok", "version": "0.1.0"})
 	})
 
-	logger.Printf("Server starting on :%s (WebSocket: ws://localhost:%s/ws)", cfg.AppPort, cfg.AppPort)
-	if err := app.Listen(":" + cfg.AppPort); err != nil {
-		log.Fatalf("Server error: %v", err)
+	// --- Graceful shutdown ---
+	quit := make(chan os.Signal, 1)
+	signal.Notify(quit, os.Interrupt, syscall.SIGTERM)
+
+	go func() {
+		logger.Info("server starting", "port", cfg.AppPort, "ws", "ws://localhost:"+cfg.AppPort+"/ws")
+		if err := app.Listen(":" + cfg.AppPort); err != nil {
+			logger.Error("server error", "error", err)
+		}
+	}()
+
+	<-quit
+	logger.Info("shutting down server...")
+	cancel() // зупиняє WS broadcast loop і всі scheduler jobs
+
+	if err := app.ShutdownWithTimeout(5 * time.Second); err != nil {
+		logger.Error("shutdown error", "error", err)
 	}
+	logger.Info("server stopped")
 }
