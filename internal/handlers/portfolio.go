@@ -5,6 +5,7 @@ import (
 	"github.com/okochadmytro/tradetracker/internal/middleware"
 	"github.com/okochadmytro/tradetracker/internal/models"
 	"github.com/okochadmytro/tradetracker/internal/services"
+	"github.com/okochadmytro/tradetracker/internal/validator"
 )
 
 type PortfolioHandler struct {
@@ -71,23 +72,23 @@ func (h *PortfolioHandler) GetCredentials(c *fiber.Ctx) error {
 	return c.JSON(creds)
 }
 
+type addCredentialRequest struct {
+	Exchange   string `json:"exchange"   validate:"required"`
+	APIKey     string `json:"api_key"    validate:"required,min=16"`
+	APISecret  string `json:"api_secret" validate:"required,min=16"`
+	Passphrase string `json:"passphrase"`
+}
+
 // POST /api/portfolio/credentials
 func (h *PortfolioHandler) AddCredential(c *fiber.Ctx) error {
 	userID := middleware.GetUserID(c)
 
-	var body struct {
-		Exchange   string `json:"exchange"`
-		APIKey     string `json:"api_key"`
-		APISecret  string `json:"api_secret"`
-		Passphrase string `json:"passphrase"`
-	}
+	var body addCredentialRequest
 	if err := c.BodyParser(&body); err != nil {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "invalid body"})
 	}
-	if body.Exchange == "" || len(body.APIKey) < 16 || len(body.APISecret) < 16 {
-		return c.Status(fiber.StatusUnprocessableEntity).JSON(fiber.Map{
-			"error": "exchange, api_key (≥16), api_secret (≥16) are required",
-		})
+	if err := validator.Validate(&body); err != nil {
+		return c.Status(fiber.StatusUnprocessableEntity).JSON(fiber.Map{"error": err.Error()})
 	}
 
 	encKey, err := h.encryption.Encrypt(body.APIKey)

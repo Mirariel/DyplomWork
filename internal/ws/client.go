@@ -2,7 +2,7 @@ package ws
 
 import (
 	"encoding/json"
-	"log"
+	"log/slog"
 	"time"
 
 	"github.com/fasthttp/websocket"
@@ -24,10 +24,10 @@ type Client struct {
 	send      chan []byte
 	userID    int64  // 0 до авторизації
 	jwtSecret string
-	logger    *log.Logger
+	logger    *slog.Logger
 }
 
-func NewClient(hub *Hub, conn *websocket.Conn, jwtSecret string, logger *log.Logger) *Client {
+func NewClient(hub *Hub, conn *websocket.Conn, jwtSecret string, logger *slog.Logger) *Client {
 	return &Client{
 		hub:       hub,
 		conn:      conn,
@@ -62,7 +62,7 @@ func (c *Client) ReadPump() {
 		_, raw, err := c.conn.ReadMessage()
 		if err != nil {
 			if websocket.IsUnexpectedCloseError(err, websocket.CloseGoingAway, websocket.CloseAbnormalClosure) {
-				c.logger.Printf("[ws] read error: %v", err)
+				c.logger.Warn("ws: unexpected read error", "error", err)
 			}
 			break
 		}
@@ -126,7 +126,7 @@ func (c *Client) handleAuth(tokenStr string) {
 	}
 
 	c.userID = claims.UserID
-	c.logger.Printf("[ws] user %d authenticated", c.userID)
+	c.logger.Info("ws: user authenticated", "user_id", c.userID)
 	c.sendJSON(map[string]interface{}{"type": "auth_success", "user_id": c.userID})
 }
 

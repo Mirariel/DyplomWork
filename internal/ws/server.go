@@ -1,9 +1,10 @@
 package ws
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
-	"log"
+	"log/slog"
 	"sync"
 	"time"
 
@@ -45,7 +46,7 @@ type Server struct {
 	prices     *services.PriceService
 	exchanges  map[string]exchange.Exchange
 	jwtSecret  string
-	logger     *log.Logger
+	logger     *slog.Logger
 }
 
 func NewServer(
@@ -54,7 +55,7 @@ func NewServer(
 	enc *services.EncryptionService,
 	prices *services.PriceService,
 	jwtSecret string,
-	logger *log.Logger,
+	logger *slog.Logger,
 ) *Server {
 	return &Server{
 		hub:        hub,
@@ -68,31 +69,36 @@ func NewServer(
 }
 
 // Run запускає головний broadcast цикл (викликати як goroutine).
-func (s *Server) Run() {
+// Зупиняється коли ctx скасовано.
+func (s *Server) Run(ctx context.Context) {
 	ticker := time.NewTicker(2 * time.Second)
 	defer ticker.Stop()
 
-	s.logger.Println("[ws] broadcast loop started")
+	s.logger.Info("ws: broadcast loop started")
 
-	for range ticker.C {
-		users := s.hub.authenticatedUsers()
-		if len(users) == 0 {
-			continue
+	for {
+		select {
+		case <-ctx.Done():
+			s.logger.Info("ws: broadcast loop stopped")
+			return
+		case <-ticker.C:
+			users := s.hub.authenticatedUsers()
+			if len(users) == 0 {
+				continue
+			}
+
+			spotPrices := s.prices.GetLivePrices(nil)
+
+			var wg sync.WaitGroup
+			for userID, clients := range users {
+				wg.Add(1)
+				go func(userID int64, clients []*Client) {
+					defer wg.Done()
+					s.broadcastToUser(userID, spotPrices)
+				}(userID, clients)
+			}
+			wg.Wait()
 		}
-
-		// Спот-ціни беремо з кешу PriceService (паралельно всі 3 біржі, TTL 30s)
-		spotPrices := s.prices.GetLivePrices(nil)
-
-		// Кожен користувач отримує свої позиції паралельно
-		var wg sync.WaitGroup
-		for userID, clients := range users {
-			wg.Add(1)
-			go func(userID int64, clients []*Client) {
-				defer wg.Done()
-				s.broadcastToUser(userID, spotPrices)
-			}(userID, clients)
-		}
-		wg.Wait()
 	}
 }
 
@@ -123,7 +129,7 @@ func (s *Server) broadcastToUser(userID int64, spotPrices map[string]float64) {
 				Passphrase: c.passphrase,
 			})
 			if err != nil {
-				s.logger.Printf("[ws] positions error user=%d exchange=%s: %v", userID, c.exchange, err)
+				s.logger.Error("ws: positions error", "user_id", userID, "exchange", c.exchange, "error", err)
 				return
 			}
 

@@ -7,6 +7,7 @@ import (
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/okochadmytro/tradetracker/internal/middleware"
 	"github.com/okochadmytro/tradetracker/internal/models"
+	"github.com/okochadmytro/tradetracker/internal/validator"
 )
 
 type AuthHandler struct {
@@ -18,24 +19,28 @@ func NewAuthHandler(users *models.UserRepository, jwtSecret string) *AuthHandler
 	return &AuthHandler{users: users, jwtSecret: jwtSecret}
 }
 
+type registerRequest struct {
+	Username string `json:"username" validate:"required,min=3,max=50"`
+	Email    string `json:"email"    validate:"required,email"`
+	Password string `json:"password" validate:"required,min=6"`
+}
+
+type loginRequest struct {
+	Email    string `json:"email"    validate:"required,email"`
+	Password string `json:"password" validate:"required"`
+}
+
 // POST /api/auth/register
 func (h *AuthHandler) Register(c *fiber.Ctx) error {
-	var body struct {
-		Username string `json:"username"`
-		Email    string `json:"email"`
-		Password string `json:"password"`
-	}
-	if err := c.BodyParser(&body); err != nil {
+	var req registerRequest
+	if err := c.BodyParser(&req); err != nil {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "invalid body"})
 	}
-
-	if len(body.Username) < 3 || body.Email == "" || len(body.Password) < 6 {
-		return c.Status(fiber.StatusUnprocessableEntity).JSON(fiber.Map{
-			"error": "username ≥3 symbols, password ≥6 symbols, email required",
-		})
+	if err := validator.Validate(&req); err != nil {
+		return c.Status(fiber.StatusUnprocessableEntity).JSON(fiber.Map{"error": err.Error()})
 	}
 
-	user, err := h.users.Create(body.Username, body.Email, body.Password)
+	user, err := h.users.Create(req.Username, req.Email, req.Password)
 	if err != nil {
 		return c.Status(fiber.StatusConflict).JSON(fiber.Map{"error": "user already exists"})
 	}
@@ -55,16 +60,16 @@ func (h *AuthHandler) Register(c *fiber.Ctx) error {
 
 // POST /api/auth/login
 func (h *AuthHandler) Login(c *fiber.Ctx) error {
-	var body struct {
-		Email    string `json:"email"`
-		Password string `json:"password"`
-	}
-	if err := c.BodyParser(&body); err != nil {
+	var req loginRequest
+	if err := c.BodyParser(&req); err != nil {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "invalid body"})
 	}
+	if err := validator.Validate(&req); err != nil {
+		return c.Status(fiber.StatusUnprocessableEntity).JSON(fiber.Map{"error": err.Error()})
+	}
 
-	user, err := h.users.FindByEmail(body.Email)
-	if err != nil || !h.users.CheckPassword(user, body.Password) {
+	user, err := h.users.FindByEmail(req.Email)
+	if err != nil || !h.users.CheckPassword(user, req.Password) {
 		return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{"error": "invalid credentials"})
 	}
 
