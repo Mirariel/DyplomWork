@@ -22,14 +22,20 @@ cp .env.example .env   # заповнити JWT_SECRET і APP_KEY
 docker compose up --build -d
 ```
 
-Що підіймається автоматично:
-| Сервіс | URL |
-|---|---|
-| Frontend (React/nginx) | http://localhost |
-| Backend API (Go/Fiber) | http://localhost:8080 |
-| Prometheus metrics | http://localhost:8080/metrics |
-| MySQL | localhost:3306 |
-| Redis | localhost:6379 |
+Що підіймається автоматично (10 контейнерів):
+
+| Сервіс | URL | Призначення |
+|---|---|---|
+| Frontend (React/nginx) | http://localhost:3000 | SPA |
+| api-gateway | http://localhost:8080 | JWT, WS, reverse-proxy |
+| market-data | http://localhost:8081 | ціни, синк |
+| trading | http://localhost:8082 | ордери, боти |
+| analytics | http://localhost:8083 | статистика |
+| NATS monitoring | http://localhost:8222 | message bus UI |
+| Prometheus | http://localhost:9090 | метрики (4 targets) |
+| Grafana | http://localhost:3001 | dashboard (admin/admin) |
+| MySQL | localhost:3306 | |
+| Redis | localhost:6379 | |
 
 Міграції застосовуються автоматично (one-shot `migrate` контейнер).
 
@@ -94,23 +100,24 @@ make migrate-up
 # або: go run ./cmd/migrate/... -cmd up
 ```
 
-### 4. Запуск backend
+### 4. Запуск сервісів
 
 ```bash
-go run ./cmd/server/...
+# Запуск всіх 4 мікросервісів одночасно (різні термінали)
+APP_PORT=8080 NATS_URL=nats://localhost:4222 MARKET_DATA_URL=http://localhost:8081 TRADING_URL=http://localhost:8082 ANALYTICS_URL=http://localhost:8083 go run ./cmd/api-gateway/...
+APP_PORT=8081 NATS_URL=nats://localhost:4222 go run ./cmd/market-data/...
+APP_PORT=8082 NATS_URL=nats://localhost:4222 go run ./cmd/trading/...
+APP_PORT=8083 go run ./cmd/analytics/...
 ```
 
-Очікуваний вивід:
-```
-time=2026-06-21T10:00:00 level=INFO msg="Database connected"
-time=2026-06-21T10:00:00 level=INFO msg="price cache: in-memory"
-time=2026-06-21T10:00:00 level=INFO msg="server starting" port=8080
-```
+> Для локального запуску потрібен NATS сервер: `docker run -p 4222:4222 -p 8222:8222 nats:2-alpine -m 8222`
 
-Перевірка:
+Перевірка всіх сервісів:
 ```bash
-curl http://localhost:8080/health
-# {"status":"ok","version":"0.1.0"}
+curl http://localhost:8080/health  # {"service":"api-gateway","status":"ok"}
+curl http://localhost:8081/health  # {"service":"market-data","status":"ok"}
+curl http://localhost:8082/health  # {"service":"trading","status":"ok"}
+curl http://localhost:8083/health  # {"service":"analytics","status":"ok"}
 ```
 
 ### 5. Frontend (dev-сервер)
