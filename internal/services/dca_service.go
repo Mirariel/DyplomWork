@@ -112,7 +112,7 @@ func (s *DCAService) executeBuy(bot models.DCABot) {
 	// Кількість = сума USD / ціна
 	qty := bot.AmountUSD / currentPrice
 
-	creds, err := s.getUserCreds(bot.UserID, bot.Exchange)
+	creds, err := GetUserCreds(s.portfolio, s.enc, bot.UserID, bot.Exchange)
 	if err != nil {
 		s.logger.Error("dca: no credentials", "bot_id", bot.ID, "exchange", bot.Exchange)
 		errMsg := "no credentials: " + err.Error()
@@ -168,33 +168,3 @@ func (s *DCAService) executeBuy(bot models.DCABot) {
 	s.notifier.DCABought(bot.Symbol, bot.Exchange, actualQty, bot.AmountUSD, currentPrice)
 }
 
-// getUserCreds розшифровує credentials для вказаної біржі.
-func (s *DCAService) getUserCreds(userID int64, exchangeName string) (exchange.Credentials, error) {
-	creds, err := s.portfolio.GetCredentials(userID)
-	if err != nil {
-		return exchange.Credentials{}, err
-	}
-	for _, c := range creds {
-		if c.Exchange != exchangeName || !c.IsActive {
-			continue
-		}
-		apiKey, err := s.enc.Decrypt(c.ApiKeyEncrypted)
-		if err != nil {
-			return exchange.Credentials{}, err
-		}
-		apiSecret, err := s.enc.Decrypt(c.ApiSecretEncrypted)
-		if err != nil {
-			return exchange.Credentials{}, err
-		}
-		passphrase := ""
-		if c.PassphraseEncrypted != nil {
-			passphrase, _ = s.enc.Decrypt(*c.PassphraseEncrypted)
-		}
-		return exchange.Credentials{
-			APIKey:     apiKey,
-			APISecret:  apiSecret,
-			Passphrase: passphrase,
-		}, nil
-	}
-	return exchange.Credentials{}, exchange.ErrNoCredentials
-}

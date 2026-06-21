@@ -77,7 +77,7 @@ func (h *OrderHandler) PlaceOrder(c *fiber.Ctx) error {
 	}
 
 	// Отримуємо credentials цієї біржі для користувача
-	creds, err := h.getUserCreds(userID, req.Exchange)
+	creds, err := services.GetUserCreds(h.portfolio, h.enc, userID, req.Exchange)
 	if err != nil {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
 			"error": "no active credentials found for " + req.Exchange,
@@ -167,7 +167,7 @@ func (h *OrderHandler) CancelOrder(c *fiber.Ctx) error {
 		})
 	}
 
-	creds, err := h.getUserCreds(userID, dbOrder.Exchange)
+	creds, err := services.GetUserCreds(h.portfolio, h.enc, userID, dbOrder.Exchange)
 	if err != nil {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "credentials not found"})
 	}
@@ -206,7 +206,7 @@ func (h *OrderHandler) GetOrder(c *fiber.Ctx) error {
 		return c.JSON(dbOrder)
 	}
 
-	creds, err := h.getUserCreds(userID, dbOrder.Exchange)
+	creds, err := services.GetUserCreds(h.portfolio, h.enc, userID, dbOrder.Exchange)
 	if err != nil {
 		return c.JSON(dbOrder)
 	}
@@ -250,35 +250,3 @@ func (h *OrderHandler) ListOrders(c *fiber.Ctx) error {
 	return c.JSON(orders)
 }
 
-// --- internal ---
-
-// getUserCreds розшифровує credentials для вказаної біржі.
-func (h *OrderHandler) getUserCreds(userID int64, exchangeName string) (exchange.Credentials, error) {
-	creds, err := h.portfolio.GetCredentials(userID)
-	if err != nil {
-		return exchange.Credentials{}, err
-	}
-	for _, c := range creds {
-		if c.Exchange != exchangeName || !c.IsActive {
-			continue
-		}
-		apiKey, err := h.enc.Decrypt(c.ApiKeyEncrypted)
-		if err != nil {
-			return exchange.Credentials{}, err
-		}
-		apiSecret, err := h.enc.Decrypt(c.ApiSecretEncrypted)
-		if err != nil {
-			return exchange.Credentials{}, err
-		}
-		passphrase := ""
-		if c.PassphraseEncrypted != nil {
-			passphrase, _ = h.enc.Decrypt(*c.PassphraseEncrypted)
-		}
-		return exchange.Credentials{
-			APIKey:     apiKey,
-			APISecret:  apiSecret,
-			Passphrase: passphrase,
-		}, nil
-	}
-	return exchange.Credentials{}, fiber.ErrNotFound
-}

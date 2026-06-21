@@ -160,7 +160,7 @@ func (s *SmartOrderService) checkTrailing(o models.SmartOrder, price float64) (b
 
 // executeOrder розміщує market ордер на біржі і оновлює статус smart order.
 func (s *SmartOrderService) executeOrder(o models.SmartOrder) {
-	creds, err := s.getUserCreds(o.UserID, o.Exchange)
+	creds, err := GetUserCreds(s.portfolio, s.enc, o.UserID, o.Exchange)
 	if err != nil {
 		s.logger.Error("smart_order: no creds", "id", o.ID, "exchange", o.Exchange, "error", err)
 		_ = s.smartOrders.MarkFailed(o.ID, "no credentials: "+err.Error())
@@ -219,33 +219,3 @@ func (s *SmartOrderService) executeOrder(o models.SmartOrder) {
 	s.notifier.SmartOrderTriggered(o.Type, o.Symbol, o.Exchange, placed.AvgPrice)
 }
 
-// getUserCreds розшифровує credentials для вказаної біржі.
-func (s *SmartOrderService) getUserCreds(userID int64, exchangeName string) (exchange.Credentials, error) {
-	creds, err := s.portfolio.GetCredentials(userID)
-	if err != nil {
-		return exchange.Credentials{}, err
-	}
-	for _, c := range creds {
-		if c.Exchange != exchangeName || !c.IsActive {
-			continue
-		}
-		apiKey, err := s.enc.Decrypt(c.ApiKeyEncrypted)
-		if err != nil {
-			return exchange.Credentials{}, err
-		}
-		apiSecret, err := s.enc.Decrypt(c.ApiSecretEncrypted)
-		if err != nil {
-			return exchange.Credentials{}, err
-		}
-		passphrase := ""
-		if c.PassphraseEncrypted != nil {
-			passphrase, _ = s.enc.Decrypt(*c.PassphraseEncrypted)
-		}
-		return exchange.Credentials{
-			APIKey:     apiKey,
-			APISecret:  apiSecret,
-			Passphrase: passphrase,
-		}, nil
-	}
-	return exchange.Credentials{}, exchange.ErrNoCredentials
-}

@@ -54,7 +54,7 @@ func (s *BotService) Start(botID, userID int64, currentPrice float64) error {
 		return fmt.Errorf("grids must be at least 2")
 	}
 
-	creds, err := s.getUserCreds(userID, bot.Exchange)
+	creds, err := GetUserCreds(s.portfolio, s.enc,userID, bot.Exchange)
 	if err != nil {
 		return fmt.Errorf("no credentials for %s: %w", bot.Exchange, err)
 	}
@@ -139,7 +139,7 @@ func (s *BotService) Stop(botID, userID int64) error {
 		return fmt.Errorf("bot is not running")
 	}
 
-	creds, err := s.getUserCreds(userID, bot.Exchange)
+	creds, err := GetUserCreds(s.portfolio, s.enc,userID, bot.Exchange)
 	if err != nil {
 		// Навіть без credentials — зупиняємо бота в БД
 		s.logger.Warn("bot: stop without credentials", "bot_id", botID, "error", err)
@@ -200,7 +200,7 @@ func (s *BotService) CheckBots(ctx context.Context) {
 }
 
 func (s *BotService) checkBot(bot models.Bot) {
-	creds, err := s.getUserCreds(bot.UserID, bot.Exchange)
+	creds, err := GetUserCreds(s.portfolio, s.enc,bot.UserID, bot.Exchange)
 	if err != nil {
 		return
 	}
@@ -321,33 +321,3 @@ func (s *BotService) calcLevels(low, high float64, grids int) []float64 {
 	return levels
 }
 
-// getUserCreds розшифровує credentials для вказаної біржі.
-func (s *BotService) getUserCreds(userID int64, exchangeName string) (exchange.Credentials, error) {
-	creds, err := s.portfolio.GetCredentials(userID)
-	if err != nil {
-		return exchange.Credentials{}, err
-	}
-	for _, c := range creds {
-		if c.Exchange != exchangeName || !c.IsActive {
-			continue
-		}
-		apiKey, err := s.enc.Decrypt(c.ApiKeyEncrypted)
-		if err != nil {
-			return exchange.Credentials{}, err
-		}
-		apiSecret, err := s.enc.Decrypt(c.ApiSecretEncrypted)
-		if err != nil {
-			return exchange.Credentials{}, err
-		}
-		passphrase := ""
-		if c.PassphraseEncrypted != nil {
-			passphrase, _ = s.enc.Decrypt(*c.PassphraseEncrypted)
-		}
-		return exchange.Credentials{
-			APIKey:     apiKey,
-			APISecret:  apiSecret,
-			Passphrase: passphrase,
-		}, nil
-	}
-	return exchange.Credentials{}, exchange.ErrNoCredentials
-}
