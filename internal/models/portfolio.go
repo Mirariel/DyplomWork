@@ -80,9 +80,12 @@ type ExternalApiCredential struct {
 	ID                  int64      `db:"id"                    json:"id"`
 	UserID              int64      `db:"user_id"               json:"user_id"`
 	Exchange            string     `db:"exchange"              json:"exchange"`
+	Label               string     `db:"label"                 json:"label"`
+	ApiKeyHint          string     `db:"api_key_hint"          json:"api_key_hint"`
 	ApiKeyEncrypted     string     `db:"api_key_encrypted"     json:"-"`
 	ApiSecretEncrypted  string     `db:"api_secret_encrypted"  json:"-"`
 	PassphraseEncrypted *string    `db:"passphrase_encrypted"  json:"-"`
+	HasPassphrase       bool       `db:"has_passphrase"        json:"has_passphrase"`
 	IsActive            bool       `db:"is_active"             json:"is_active"`
 	LastSyncAt          *time.Time `db:"last_sync_at"          json:"last_sync_at"`
 	LastSyncError       *string    `db:"last_sync_error"       json:"last_sync_error"`
@@ -142,10 +145,12 @@ func (r *PortfolioRepository) GetCredentials(userID int64) ([]ExternalApiCredent
 func (r *PortfolioRepository) UpsertCredential(cred *ExternalApiCredential) error {
 	_, err := r.db.NamedExec(`
 		INSERT INTO external_api_credentials
-			(user_id, exchange, api_key_encrypted, api_secret_encrypted, passphrase_encrypted, is_active)
+			(user_id, exchange, label, api_key_hint, api_key_encrypted, api_secret_encrypted, passphrase_encrypted, is_active)
 		VALUES
-			(:user_id, :exchange, :api_key_encrypted, :api_secret_encrypted, :passphrase_encrypted, :is_active)
+			(:user_id, :exchange, :label, :api_key_hint, :api_key_encrypted, :api_secret_encrypted, :passphrase_encrypted, :is_active)
 		ON DUPLICATE KEY UPDATE
+			label                = VALUES(label),
+			api_key_hint         = VALUES(api_key_hint),
 			api_key_encrypted    = VALUES(api_key_encrypted),
 			api_secret_encrypted = VALUES(api_secret_encrypted),
 			passphrase_encrypted = VALUES(passphrase_encrypted),

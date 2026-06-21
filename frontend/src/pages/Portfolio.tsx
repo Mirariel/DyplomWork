@@ -333,9 +333,6 @@ function CredentialsTab() {
 
   const needsPassphrase = exchange === 'okx' || exchange === 'kucoin'
 
-  const maskKey = (key: string) =>
-    key.length > 8 ? key.slice(0, 4) + '••••••••' + key.slice(-4) : '••••••••'
-
   if (isLoading) return <Spinner />
 
   return (
@@ -355,13 +352,14 @@ function CredentialsTab() {
               <div>
                 <p className="text-sm font-medium text-white capitalize">
                   {c.exchange}{' '}
-                  <span className="text-slate-400 font-normal">— {c.label}</span>
+                  {c.label && <span className="text-slate-400 font-normal">— {c.label}</span>}
                 </p>
                 <p className="text-xs text-slate-500 mt-0.5 font-mono">
-                  {maskKey(c.api_key)}
+                  {c.api_key_hint || '••••••••'}
                 </p>
                 <p className="text-xs text-slate-600 mt-0.5">
                   Added {fmtDate(c.created_at)}
+                  {c.last_sync_at && ` · Last sync ${fmtDate(c.last_sync_at)}`}
                 </p>
               </div>
               <button

@@ -72,8 +72,11 @@ export interface Credential {
   user_id: number
   exchange: string
   label: string
-  api_key: string
+  api_key_hint: string
   has_passphrase: boolean
+  is_active: boolean
+  last_sync_at: string | null
+  last_sync_error: string | null
   created_at: string
 }
 

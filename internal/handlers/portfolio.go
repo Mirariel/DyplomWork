@@ -74,6 +74,7 @@ func (h *PortfolioHandler) GetCredentials(c *fiber.Ctx) error {
 
 type addCredentialRequest struct {
 	Exchange   string `json:"exchange"   validate:"required"`
+	Label      string `json:"label"`
 	APIKey     string `json:"api_key"    validate:"required,min=16"`
 	APISecret  string `json:"api_secret" validate:"required,min=16"`
 	Passphrase string `json:"passphrase"`
@@ -100,9 +101,17 @@ func (h *PortfolioHandler) AddCredential(c *fiber.Ctx) error {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "encryption failed"})
 	}
 
+	// Зберігаємо лише перші 8 символів ключа як hint (безпечно показувати в UI)
+	hint := body.APIKey
+	if len(hint) > 8 {
+		hint = hint[:4] + "••••" + hint[len(hint)-4:]
+	}
+
 	cred := &models.ExternalApiCredential{
 		UserID:             userID,
 		Exchange:           body.Exchange,
+		Label:              body.Label,
+		ApiKeyHint:         hint,
 		ApiKeyEncrypted:    encKey,
 		ApiSecretEncrypted: encSecret,
 		IsActive:           true,
@@ -114,13 +123,19 @@ func (h *PortfolioHandler) AddCredential(c *fiber.Ctx) error {
 			return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "encryption failed"})
 		}
 		cred.PassphraseEncrypted = &encPass
+		cred.HasPassphrase = true
 	}
 
 	if err := h.repo.UpsertCredential(cred); err != nil {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": err.Error()})
 	}
 
-	return c.Status(fiber.StatusCreated).JSON(fiber.Map{"status": "ok"})
+	creds, err := h.repo.GetCredentials(userID)
+	if err != nil || len(creds) == 0 {
+		return c.Status(fiber.StatusCreated).JSON(fiber.Map{"status": "ok"})
+	}
+	// Повертаємо щойно додану credential (остання за created_at)
+	return c.Status(fiber.StatusCreated).JSON(creds[len(creds)-1])
 }
 
 // DELETE /api/portfolio/credentials/:id
