@@ -796,3 +796,78 @@ Bash-сесія не має прав до Windows message loop / named pipe init
 **Урок:** Docker Desktop на Windows = GUI-застосунок. Daemon (dockerd) запускається лише через нього.
 Не намагатись запускати через `start cmd.exe` — це не дає потрібного контексту.
 При наступному сеансі переконатись що Docker Desktop вже запущений перед запуском `docker compose up`.
+
+---
+
+## P-030 — Blank screen після логіну: `null` замість `[]` з БД + nginx проксі на неіснуючий сервіс
+
+**Коли:** Тестування після мікросервісного рефакторингу (Фаза 15).
+
+**Проблема (два незалежних баги):**
+
+### 1. `sqlx.Select` → `null` у JSON для нового користувача
+
+`sqlx.Select` не ініціалізує slice коли результат порожній — змінна залишається `nil`.
+Go серіалізує `nil` slice як `null` у JSON (не `[]`):
+
+```go
+var snaps []PortfolioSnapshot          // nil якщо немає рядків
+r.db.Select(&snaps, "SELECT ...")
+return c.JSON(snaps)                   // → "null"
+```
+
+На фронтенді React Query отримує `data = null` (не `undefined`), тому дефолт `= []`
+у деструктуризації не спрацьовує:
+
+```tsx
+const { data: snapshots = [] } = useQuery(...)  // data = null, не undefined!
+const chartData = snapshots.map(...)             // TypeError: null.map is not a function
+```
+
+Оскільки ErrorBoundary відсутній — crash рендеру = порожній білий екран.
+Вражало: Dashboard, Portfolio, Orders, Bots, DCA, Smart Orders, Analytics —
+будь-яка сторінка де є список і користувач щойно зареєстрований.
+
+### 2. nginx проксі на `api:8080` (старе ім'я) після рефакторингу
+
+Після перейменування сервісу `api` → `api-gateway` у `docker-compose.yml`
+`nginx.conf` залишився з:
+```nginx
+proxy_pass http://api:8080;   # 502 Bad Gateway — сервіс не існує
+```
+Це блокувало всі API-запити у Docker-режимі (`localhost:3000`).
+
+**Рішення:**
+
+### 1. Ініціалізувати slice через `make` перед `Select`
+
+```go
+// Було:
+var snaps []PortfolioSnapshot
+
+// Стало:
+snaps := make([]PortfolioSnapshot, 0)
+```
+
+Виправлено у: `snapshot.go`, `bot.go`, `dca_bot.go`, `order.go`,
+`smart_order.go`, `portfolio.go`, `analytics_service.go`.
+
+### 2. Оновити nginx.conf
+
+```nginx
+# Було:
+proxy_pass http://api:8080;
+
+# Стало:
+proxy_pass http://api-gateway:8080;
+```
+
+**Урок:**
+- У Go `nil` slice і порожній slice (`[]T{}`) — різні речі для `encoding/json`.
+  Завжди ініціалізувати через `make([]T, 0)` у репозиторіях що повертають списки.
+- При перейменуванні Docker-сервісу — шукати всі місця де згадується стара назва
+  (`nginx.conf`, `.env.example`, `README`, health-check скрипти).
+- Після рефакторингу архітектури — тестувати з **новим** (порожнім) користувачем,
+  бо баги з `null`-відповідями проявляються лише при відсутності даних у БД.
+
+**Зачеплені файли:** `frontend/nginx.conf`, `internal/models/*.go`, `internal/services/analytics_service.go`
