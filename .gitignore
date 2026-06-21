@@ -1,0 +1,36 @@
+# Environment
+.env
+.claude
+
+# Build artifacts
+bin/
+*.exe
+*.test
+
+# Storage
+storage/
+
+# IDE
+.idea/
+
+# Practice Schedule
+Pracktic_shedule
+
+# Student docs
+STUDENT_DOCS.md
+
+# Frontend build artifacts and dependencies
+frontend/node_modules/
+frontend/dist/
+
+# AI assistant files
+memory/
+MEMORY.md
+
+
+# OS
+.DS_Store
+Thumbs.db
+
+# This file
+.gitignore
