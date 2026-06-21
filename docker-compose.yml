@@ -1,12 +1,12 @@
 services:
 
-  # ── MySQL ────────────────────────────────────────────────────────────────────
+  # ── MySQL ─────────────────────────────────────────────────────────────────────
   db:
     image: mysql:8.0
     restart: unless-stopped
     environment:
       MYSQL_ROOT_PASSWORD: ${DB_PASSWORD:-tradetracker}
-      MYSQL_DATABASE:      ${DB_NAME:-tradetracker}
+      MYSQL_DATABASE:      ${DB_NAME:-tradetracker_go}
     ports:
       - "3306:3306"
     volumes:
@@ -20,7 +20,7 @@ services:
     networks:
       - tradetracker
 
-  # ── Redis (price cache) ───────────────────────────────────────────────────────
+  # ── Redis (shared price cache) ────────────────────────────────────────────────
   redis:
     image: redis:7-alpine
     restart: unless-stopped
@@ -29,7 +29,18 @@ services:
     networks:
       - tradetracker
 
-  # ── DB migrations (one-shot, exits after UP) ──────────────────────────────────
+  # ── NATS (inter-service message bus) ──────────────────────────────────────────
+  nats:
+    image: nats:2-alpine
+    restart: unless-stopped
+    ports:
+      - "4222:4222"   # client connections
+      - "8222:8222"   # HTTP monitoring UI
+    command: ["-m", "8222"]
+    networks:
+      - tradetracker
+
+  # ── DB migrations (one-shot) ──────────────────────────────────────────────────
   migrate:
     build:
       context: .
@@ -40,7 +51,7 @@ services:
       DB_PORT:     3306
       DB_USER:     root
       DB_PASSWORD: ${DB_PASSWORD:-tradetracker}
-      DB_NAME:     ${DB_NAME:-tradetracker}
+      DB_NAME:     ${DB_NAME:-tradetracker_go}
     depends_on:
       db:
         condition: service_healthy
@@ -48,11 +59,13 @@ services:
       - tradetracker
     restart: "no"
 
-  # ── Go API ───────────────────────────────────────────────────────────────────
-  api:
+  # ── api-gateway (:8080) ───────────────────────────────────────────────────────
+  # Single external entry point: JWT auth, rate limiting, WebSocket, reverse-proxy.
+  api-gateway:
     build:
       context: .
       dockerfile: Dockerfile
+    command: ["./api-gateway"]
     restart: unless-stopped
     ports:
       - "8080:8080"
@@ -67,12 +80,110 @@ services:
       DB_PORT:     3306
       DB_USER:     root
       DB_PASSWORD: ${DB_PASSWORD:-tradetracker}
-      DB_NAME:     ${DB_NAME:-tradetracker}
+      DB_NAME:     ${DB_NAME:-tradetracker_go}
 
       REDIS_URL: redis:6379
+      NATS_URL:  nats://nats:4222
+
+      # Internal URLs of downstream services
+      MARKET_DATA_URL: http://market-data:8081
+      TRADING_URL:     http://trading:8082
+      ANALYTICS_URL:   http://analytics:8083
 
       TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
       TELEGRAM_CHAT_ID:   ${TELEGRAM_CHAT_ID:-}
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      nats:
+        condition: service_started
+    networks:
+      - tradetracker
+
+  # ── market-data (:8081) ───────────────────────────────────────────────────────
+  # Exchange integration: price scheduler → Redis + NATS; sync endpoints.
+  market-data:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: ["./market-data"]
+    restart: unless-stopped
+    ports:
+      - "8081:8081"
+    environment:
+      APP_PORT:  8081
+      APP_DEBUG: ${APP_DEBUG:-false}
+      APP_KEY:   ${APP_KEY:-change-me-32-character-key-here!}
+
+      DB_HOST:     db
+      DB_PORT:     3306
+      DB_USER:     root
+      DB_PASSWORD: ${DB_PASSWORD:-tradetracker}
+      DB_NAME:     ${DB_NAME:-tradetracker_go}
+
+      REDIS_URL: redis:6379
+      NATS_URL:  nats://nats:4222
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      nats:
+        condition: service_started
+    networks:
+      - tradetracker
+
+  # ── trading (:8082) ───────────────────────────────────────────────────────────
+  # Portfolio, orders, smart orders, grid bots, DCA bots + schedulers.
+  trading:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: ["./trading"]
+    restart: unless-stopped
+    ports:
+      - "8082:8082"
+    environment:
+      APP_PORT:  8082
+      APP_DEBUG: ${APP_DEBUG:-false}
+      APP_KEY:   ${APP_KEY:-change-me-32-character-key-here!}
+
+      DB_HOST:     db
+      DB_PORT:     3306
+      DB_USER:     root
+      DB_PASSWORD: ${DB_PASSWORD:-tradetracker}
+      DB_NAME:     ${DB_NAME:-tradetracker_go}
+
+      REDIS_URL: redis:6379
+      NATS_URL:  nats://nats:4222
+
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
+      TELEGRAM_CHAT_ID:   ${TELEGRAM_CHAT_ID:-}
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      nats:
+        condition: service_started
+    networks:
+      - tradetracker
+
+  # ── analytics (:8083) ─────────────────────────────────────────────────────────
+  # Trade statistics, portfolio snapshots, arbitrage scanner.
+  analytics:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: ["./analytics"]
+    restart: unless-stopped
+    ports:
+      - "8083:8083"
+    environment:
+      APP_PORT:  8083
+      APP_DEBUG: ${APP_DEBUG:-false}
+
+      DB_HOST:     db
+      DB_PORT:     3306
+      DB_USER:     root
+      DB_PASSWORD: ${DB_PASSWORD:-tradetracker}
+      DB_NAME:     ${DB_NAME:-tradetracker_go}
     depends_on:
       migrate:
         condition: service_completed_successfully
@@ -86,14 +197,55 @@ services:
       dockerfile: Dockerfile
     restart: unless-stopped
     ports:
-      - "80:80"
+      - "3000:80"
     depends_on:
-      - api
+      - api-gateway
+    networks:
+      - tradetracker
+
+  # ── Prometheus ────────────────────────────────────────────────────────────────
+  prometheus:
+    image: prom/prometheus:v2.53.0
+    restart: unless-stopped
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.path=/prometheus"
+      - "--storage.tsdb.retention.time=7d"
+      - "--web.enable-lifecycle"
+    depends_on:
+      - api-gateway
+    networks:
+      - tradetracker
+
+  # ── Grafana ───────────────────────────────────────────────────────────────────
+  grafana:
+    image: grafana/grafana:11.0.0
+    restart: unless-stopped
+    ports:
+      - "3001:3000"
+    environment:
+      GF_SECURITY_ADMIN_USER:     admin
+      GF_SECURITY_ADMIN_PASSWORD: admin
+      GF_AUTH_ANONYMOUS_ENABLED:  "false"
+      GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH: /var/lib/grafana/dashboards/tradetracker.json
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./monitoring/grafana/dashboards:/var/lib/grafana/dashboards:ro
+    depends_on:
+      - prometheus
     networks:
       - tradetracker
 
 volumes:
   mysql_data:
+  prometheus_data:
+  grafana_data:
 
 networks:
   tradetracker:

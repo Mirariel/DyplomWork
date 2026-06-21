@@ -1,4 +1,4 @@
-# ─── Stage 1: build ──────────────────────────────────────────────────────────
+# ─── Stage 1: build all service binaries ──────────────────────────────────────
 FROM golang:1.26-alpine AS builder
 
 RUN apk add --no-cache git
@@ -10,20 +10,25 @@ RUN go mod download
 
 COPY . .
 
-RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -o /bin/server  ./cmd/server
-RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -o /bin/migrate ./cmd/migrate
+RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -o /bin/api-gateway  ./cmd/api-gateway
+RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -o /bin/market-data  ./cmd/market-data
+RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -o /bin/trading      ./cmd/trading
+RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -o /bin/analytics    ./cmd/analytics
+RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -o /bin/migrate      ./cmd/migrate
 
-# ─── Stage 2: runtime ────────────────────────────────────────────────────────
+# ─── Stage 2: minimal runtime image ───────────────────────────────────────────
 FROM alpine:3.20
 
 RUN apk add --no-cache ca-certificates tzdata
 
 WORKDIR /app
 
-COPY --from=builder /bin/server  ./server
-COPY --from=builder /bin/migrate ./migrate
-COPY migrations/                 ./migrations/
+COPY --from=builder /bin/api-gateway  ./api-gateway
+COPY --from=builder /bin/market-data  ./market-data
+COPY --from=builder /bin/trading      ./trading
+COPY --from=builder /bin/analytics    ./analytics
+COPY --from=builder /bin/migrate      ./migrate
+COPY migrations/                      ./migrations/
 
-EXPOSE 8080
-
-CMD ["./server"]
+# Default: api-gateway.  docker-compose overrides CMD per service.
+CMD ["./api-gateway"]
