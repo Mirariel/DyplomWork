@@ -57,6 +57,20 @@ Go дає нам goroutines, канали, і compile-time safety без overhea
 | Validation | `go-playground/validator/v10` | v10.30.3 |
 | Redis client | `redis/go-redis/v9` | v9.20.0 |
 
+**Frontend stack:**
+
+| Компонент | Бібліотека | Версія |
+|---|---|---|
+| Build tool | `vite` + `@vitejs/plugin-react` | v6.4.3 / v4.5.2 |
+| UI framework | `react` + `react-dom` | v18.3.1 |
+| Routing | `react-router-dom` | v6.30.0 |
+| Data fetching | `@tanstack/react-query` | v5.80.6 |
+| HTTP client | `axios` | v1.9.0 |
+| Charts | `recharts` | v2.15.4 |
+| Icons | `lucide-react` | v0.511.0 |
+| CSS | `tailwindcss` + `@tailwindcss/vite` | v4.1.8 |
+| Language | TypeScript (strict) | v5.8.3 |
+
 ---
 
 ## Що реалізовано (повний список)
@@ -277,11 +291,11 @@ GET    /ws                                — WebSocket (потребує auth �
 
 | Проблема | Файл | Пріоритет |
 |---|---|---|
-| `getUserCreds` продубльовано в handler, smart_order_service, bot_service, ws/server | скрізь | 🟡 MEDIUM |
-| `GetLivePrices(nil)` — витягує всі ціни замість потрібних | `ws/server.go` | 🟡 MEDIUM |
-| Немає жодного тесту | весь проєкт | 🟡 MEDIUM |
+| `getUserCreds` продубльовано в 5 місцях | handlers, services, ws | 🟡 MEDIUM |
+| Немає інтеграційних тестів для репозиторіїв | весь проєкт | 🟡 MEDIUM |
+| Frontend bundle 725 kB — потрібен code splitting | `frontend/` | 🟡 MEDIUM |
 | `gorilla/websocket` в go.mod — не використовується | `go.mod` | 🟢 LOW |
-| `max()` і `roundFloat()` — треба перенести в `internal/utils` | `ws/server.go` | 🟢 LOW |
+| `roundFloat()` і хелпери — варто перенести в `internal/utils` | `ws/server.go` | 🟢 LOW |
 
 ---
 

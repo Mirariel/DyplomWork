@@ -547,3 +547,109 @@ WS сервер надсилає `LivePosition` (поля: `entry_price`, `pnl`,
 **Урок:** Завжди звіряти URL фронту з `main.go` — вони можуть розходитись після рефакторингу.
 
 **Зачеплені файли:** `frontend/src/api.ts`
+
+---
+
+## P-021 — `node_modules` і `dist` потрапили в git
+
+**Коли:** Перший коміт frontend (Фаза 7).
+
+**Проблема:**
+`frontend/` не мала `.gitignore`. Команда `git add frontend/` рекурсивно підхопила
+`node_modules/` (~10 000 файлів) і `dist/` у коміт. Репозиторій роздувся на ~1.5M рядків.
+
+**Рішення:**
+```bash
+# Видалити з індексу без видалення з диску
+git rm --cached -r frontend/node_modules frontend/dist
+
+# Додати в .gitignore
+echo "frontend/node_modules/" >> .gitignore
+echo "frontend/dist/" >> .gitignore
+```
+Потім окремий коміт для прибирання.
+
+**Урок:** Перед `git add <нова директорія>` — переконатись що в проекті або кореневому `.gitignore`
+є рядки для `node_modules/` і build-директорій.
+
+**Зачеплені файли:** `.gitignore`
+
+---
+
+## P-022 — `vite-env.d.ts` відсутній — TS не знає тип CSS-імпортів
+
+**Коли:** `npm run build` в Фазі 7.
+
+**Проблема:**
+```
+src/main.tsx(5,8): error TS2307: Cannot find module './index.css'
+```
+Vite розуміє `import './index.css'`, але TypeScript — ні. Для цього потрібен
+файл `src/vite-env.d.ts` з `/// <reference types="vite/client" />`, який
+оголошує CSS/SVG/PNG модулі як `string`.
+
+**Рішення:** Створити `src/vite-env.d.ts`:
+```typescript
+/// <reference types="vite/client" />
+```
+
+**Урок:** Будь-який Vite + TypeScript проект потребує `vite-env.d.ts`. Без нього
+tsc не знає як типізувати нестандартні імпорти (css, svg, env змінні).
+
+**Зачеплені файли:** `frontend/src/vite-env.d.ts` (новий)
+
+---
+
+## P-023 — `onSave` в `EditableComment` — несумісні типи Promise
+
+**Коли:** `npm run build` в Фазі 7.
+
+**Проблема:**
+```
+src/pages/Portfolio.tsx(154,21): error TS2322:
+Type 'Promise<Position>' is not assignable to type 'Promise<void>'.
+```
+`EditableComment` очікував `onSave: (v: string) => Promise<void>`,
+але `mutateAsync` повертає `Promise<Position>` — TypeScript відмовляється
+неявно відкидати значення.
+
+**Рішення:** Явно відкинути значення через `.then(() => undefined)`:
+```tsx
+onSave={(comment) =>
+  commentMutation.mutateAsync({ id: p.id, comment }).then(() => undefined)
+}
+```
+
+**Урок:** `Promise<T>` не є підтипом `Promise<void>` в TypeScript strict mode.
+Якщо інтерфейс оголошує `void`, треба або змінити тип пропу на `Promise<unknown>`,
+або явно конвертувати через `.then(() => undefined)`.
+
+**Зачеплені файли:** `frontend/src/pages/Portfolio.tsx`
+
+---
+
+## P-024 — React `key` prop з індексом масиву в динамічних таблицях
+
+**Коли:** Аудит коду після запуску frontend (Фаза 7).
+
+**Проблема:**
+В `Analytics.tsx` рядки CoinPerformance і Arbitrage таблиць мали `key={i}` (індекс).
+При refetch (сортування змінилось, нові дані) React не може правильно відстежити
+ідентичність рядків → зайвий re-render, можливі баги з анімаціями/фокусом.
+
+**Рішення:**
+```tsx
+// Було:
+sorted.map((c, i) => <tr key={i}>
+
+// Стало:
+sorted.map((c) => <tr key={`${c.symbol}-${c.exchange}`}>
+
+// Arbitrage:
+opps.map((opp) => <tr key={`${opp.symbol}-${opp.buy_exchange}-${opp.sell_exchange}`}>
+```
+
+**Урок:** `key={index}` — завжди антипатерн для списків, які можуть оновлюватись або
+пересортовуватись. Використовувати унікальні бізнес-ідентифікатори.
+
+**Зачеплені файли:** `frontend/src/pages/Analytics.tsx`

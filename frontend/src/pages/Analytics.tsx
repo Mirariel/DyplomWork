@@ -112,9 +112,9 @@ function CoinPerformanceSection() {
               </td>
             </tr>
           ) : (
-            sorted.map((c, i) => (
+            sorted.map((c) => (
               <tr
-                key={i}
+                key={`${c.symbol}-${c.exchange}`}
                 className="border-b border-slate-700/50 hover:bg-slate-700/40 transition-colors"
               >
                 <td className="px-4 py-3 font-medium text-white">{c.symbol}</td>
@@ -223,9 +223,9 @@ function ArbitrageSection() {
                   </td>
                 </tr>
               ) : (
-                opps.map((opp, i) => (
+                opps.map((opp) => (
                   <tr
-                    key={i}
+                    key={`${opp.symbol}-${opp.buy_exchange}-${opp.sell_exchange}`}
                     className="border-b border-slate-700/50 hover:bg-slate-700/40 transition-colors"
                   >
                     <td className="px-4 py-3 font-medium text-white">{opp.symbol}</td>
