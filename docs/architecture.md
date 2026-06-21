@@ -203,7 +203,7 @@ tradetracker-go/
 │   │
 │   ├── models/                 — структури + репозиторії (shared між усіма сервісами)
 │   │   ├── user.go             — User + UserRepository (Create, Find, UpdateProfile, UpdatePassword)
-│   │   ├── portfolio.go        — Asset, Position, History, Credentials, PortfolioRepository
+│   │   ├── portfolio.go        — Asset, Position, History, ExternalApiCredential (label, api_key_hint), PortfolioRepository
 │   │   ├── order.go            — Order + OrderRepository
 │   │   ├── smart_order.go      — SmartOrder + SmartOrderRepository
 │   │   ├── bot.go              — Bot + BotGrid + BotRepository
@@ -213,7 +213,7 @@ tradetracker-go/
 │   │
 │   ├── handlers/               — HTTP handlers (Transport Layer, shared)
 │   │   ├── auth.go             — Register/Login/Logout/Me/UpdateProfile/ChangePassword
-│   │   ├── portfolio.go        — CRUD credentials, comments
+│   │   ├── portfolio.go        — CRUD credentials (label, api_key_hint), comments
 │   │   ├── sync.go             — full/positions/history/prices
 │   │   ├── order.go            — PlaceOrder/CancelOrder/GetOrder/List
 │   │   ├── smart_order.go      — Create/List/Get/Cancel
@@ -263,11 +263,11 @@ tradetracker-go/
 │       ├── server.go           — broadcast loop (2 s): positions + prices
 │       └── handler.go          — Fiber WS upgrade
 │
-├── migrations/                 — SQL файли 000001–000006
+├── migrations/                 — SQL файли 000001–000007
 │
 ├── frontend/
 │   ├── Dockerfile              — node:20-alpine → nginx:1.27-alpine
-│   ├── nginx.conf              — SPA routing, /api proxy → :8080, /ws WS upgrade
+│   ├── nginx.conf              — SPA routing, /api+/ws+/health proxy → api-gateway:8080
 │   └── src/
 │       ├── App.tsx             — React.lazy (10 сторінок) + Suspense
 │       ├── api.ts              — 35+ типізованих API функцій
@@ -358,6 +358,7 @@ if !ok {
 | `bots` + `bot_grids` | trading | 000004 |
 | `portfolio_snapshots` | trading | 000005 |
 | `dca_bots` | trading | 000006 |
+| `external_api_credentials` (label, api_key_hint) | trading | 000007 |
 
 > Shared database — прагматичний підхід для дипломного проєкту.
 > Повна ізоляція БД (окрема схема/інстанс на сервіс) — природний наступний крок.

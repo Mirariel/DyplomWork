@@ -147,7 +147,7 @@ curl -X POST http://localhost:8080/api/auth/register \
 curl -X POST http://localhost:8080/api/portfolio/credentials \
   -H "Authorization: Bearer <token>" \
   -H "Content-Type: application/json" \
-  -d '{"exchange":"binance","api_key":"...","api_secret":"..."}'
+  -d '{"exchange":"binance","label":"Main","api_key":"...","api_secret":"..."}'
 ```
 
 ### 3. Синхронізувати портфель
@@ -188,7 +188,7 @@ go test ./...
 ```bash
 make migrate-up        # застосувати всі нові
 make migrate-down      # відкотити останню
-make migrate-version   # поточна версія (має бути 6)
+make migrate-version   # поточна версія (має бути 7)
 make migrate-force     # примусово встановити версію (якщо dirty=true)
 ```
 

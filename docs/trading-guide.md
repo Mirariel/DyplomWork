@@ -23,6 +23,7 @@ curl -X POST http://localhost:8080/api/portfolio/credentials \
   -H "Content-Type: application/json" \
   -d '{
     "exchange":   "binance",
+    "label":      "Main account",
     "api_key":    "your-binance-api-key",
     "api_secret": "your-binance-api-secret"
   }'

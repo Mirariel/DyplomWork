@@ -123,7 +123,17 @@ Prometheus метрики (text/plain format).
 
 **Відповідь 200:**
 ```json
-[{ "id": 1, "exchange": "binance", "is_active": true, "created_at": "..." }]
+[{
+  "id": 1,
+  "exchange": "binance",
+  "label": "Main account",
+  "api_key_hint": "abcd••••uvwx",
+  "has_passphrase": false,
+  "is_active": true,
+  "last_sync_at": "2026-06-21T10:00:00Z",
+  "last_sync_error": null,
+  "created_at": "2026-06-20T08:00:00Z"
+}]
 ```
 
 ---
@@ -133,14 +143,17 @@ Prometheus метрики (text/plain format).
 ```json
 {
   "exchange":   "binance",
-  "api_key":    "your-api-key",
-  "api_secret": "your-api-secret",
+  "label":      "Main account",
+  "api_key":    "your-api-key-min-16-chars",
+  "api_secret": "your-api-secret-min-16-chars",
   "passphrase": ""
 }
 ```
+`label` — довільна мітка для зручності (необов'язкове).
 `passphrase` обов'язковий тільки для OKX і KuCoin.
+`api_key` та `api_secret` — мінімум 16 символів.
 
-**Відповідь 201:** щойно створений запис (без ключів).
+**Відповідь 201:** щойно створений запис; `api_key_hint` = перші 4 + `••••` + останні 4 символи ключа.
 
 ---
 

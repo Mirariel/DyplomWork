@@ -54,7 +54,7 @@ Go дає нам goroutines, канали, і compile-time safety без overhea
 | MySQL | localhost:3306 | |
 | Redis | localhost:6379 | price cache |
 
-**БД:** `tradetracker_go` (MySQL), версія міграції: 6
+**БД:** `tradetracker_go` (MySQL), версія міграції: 7
 **Запуск:** `docker compose up --build -d` → 10 контейнерів
 
 ---
@@ -119,7 +119,7 @@ tradetracker-go/
 │   │   └── bus.go              — Bus (Connect/Publish/Subscribe/Close), SubjPricesUpdated, PricesMsg
 │   ├── models/
 │   │   ├── user.go             — User + UserRepository (Create/Find/UpdateProfile/UpdatePassword)
-│   │   ├── portfolio.go        — Asset, Position, History, Credentials + PortfolioRepository
+│   │   ├── portfolio.go        — Asset, Position, History, ExternalApiCredential (label, api_key_hint) + PortfolioRepository
 │   │   ├── order.go            — Order + OrderRepository
 │   │   ├── smart_order.go      — SmartOrder + SmartOrderRepository
 │   │   ├── bot.go              — Bot + BotGrid + BotRepository
@@ -128,7 +128,7 @@ tradetracker-go/
 │   │   └── *_test.go           — 33 інтеграційні тести
 │   ├── handlers/
 │   │   ├── auth.go             — Register/Login/Logout/Me/UpdateProfile/ChangePassword
-│   │   ├── portfolio.go        — CRUD credentials, comments
+│   │   ├── portfolio.go        — CRUD credentials (label, api_key_hint), comments
 │   │   ├── sync.go             — full/positions/history/prices
 │   │   ├── order.go            — PlaceOrder/Cancel/Get/List
 │   │   ├── smart_order.go      — Create/List/Get/Cancel
@@ -172,23 +172,24 @@ tradetracker-go/
 │       ├── handler.go          — Fiber WS upgrade
 │       └── server_test.go      — unit тести roundFloat/formatLeverage
 │
-├── migrations/                 — SQL файли 000001–000006
+├── migrations/                 — SQL файли 000001–000007
 │   ├── 000001_initial_schema   — users, assets, portfolios, positions, history, credentials
 │   ├── 000002_orders           — orders table
 │   ├── 000003_smart_orders     — smart_orders table
 │   ├── 000004_bots             — bots + bot_grids tables
 │   ├── 000005_snapshots        — portfolio_snapshots table
-│   └── 000006_dca_bots         — dca_bots table
+│   ├── 000006_dca_bots         — dca_bots table
+│   └── 000007_credentials_label — label + api_key_hint колонки в external_api_credentials
 │
 ├── frontend/
 │   ├── Dockerfile              — node:20-alpine → nginx:1.27-alpine
-│   ├── nginx.conf              — SPA routing, /api proxy → :8080, /ws WS upgrade, asset caching
+│   ├── nginx.conf              — SPA routing, /api+/ws+/health proxy → api-gateway:8080, asset caching
 │   ├── vite.config.ts          — manualChunks: vendor-react/query/charts/icons/axios
 │   └── src/
 │       ├── App.tsx             — React.lazy (10 сторінок) + Suspense + route guards
-│       ├── api.ts              — 35+ типізованих API функцій
+│       ├── api.ts              — 35+ типізованих API функцій; Credential: label, api_key_hint
 │       ├── ws.ts               — useWebSocket hook (auto-reconnect 3 s)
-│       ├── context/AuthContext.tsx — user/token/login/logout/updateUser
+│       ├── context/AuthContext.tsx — user/token/login/logout/updateUser (cancelled-flag cleanup)
 │       ├── components/Layout.tsx   — sidebar (8 nav items + Settings), user footer
 │       └── pages/              — Login, Register, Dashboard, Portfolio, Orders,
 │                                  SmartOrders, GridBots, DCABots, Analytics, Settings
