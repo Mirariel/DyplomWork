@@ -770,3 +770,29 @@ got "2026-06-01T00:00:00Z", want "2026-06-01"
 Не покладатись на те що `DATE` → `string` без перетворення.
 
 **Зачеплені файли:** `internal/models/snapshot_repo_test.go`
+
+---
+
+## P-029 — Docker Desktop daemon не стартує з bash-сесії Claude Code
+
+**Коли:** Запуск `docker compose up` після встановлення Docker Desktop (Фаза 12).
+
+**Проблема:**
+Docker Desktop 4.78.0 встановлено через `winget`, але `docker ps` повертає:
+```
+failed to connect to the docker API at npipe:////./pipe/docker_engine;
+open //./pipe/docker_engine: The system cannot find the file specified.
+```
+Навіть після `start "" "Docker Desktop.exe"` з bash — pipe `docker_engine` не з'являється.
+Причина: Docker Desktop на Windows потребує запуску через GUI (клік по ярлику або системний трей)
+і проходження першого launch wizard (EULA, WSL2 setup, engine initialization).
+Bash-сесія не має прав до Windows message loop / named pipe initialization.
+
+**Рішення:**
+1. Запустити Docker Desktop вручну (Start → Docker Desktop, або ярлик на робочому столі)
+2. Почекати доки в системному треї з'явиться іконка кита зі статусом "Docker Desktop is running"
+3. Після цього всі CLI команди (`docker`, `docker compose`) доступні з будь-якого термінала
+
+**Урок:** Docker Desktop на Windows = GUI-застосунок. Daemon (dockerd) запускається лише через нього.
+Не намагатись запускати через `start cmd.exe` — це не дає потрібного контексту.
+При наступному сеансі переконатись що Docker Desktop вже запущений перед запуском `docker compose up`.

@@ -44,7 +44,7 @@ Go дає нам goroutines, канали, і compile-time safety без overhea
 **WebSocket:** `ws://localhost:8080/ws`
 **БД:** MySQL `tradetracker` (локально або Docker)
 **Міграції:** версія 6 (`dca_bots` table) ✅
-**Docker:** `docker compose up --build -d` → все запускається автоматично
+**Docker:** `docker compose up --build -d` → все запускається автоматично (потребує запущеного Docker Desktop GUI)
 
 ---
 
@@ -338,6 +338,7 @@ GET    /ws   (WebSocket)
 - [x] `docker-compose.yml`: db (MySQL 8), redis, migrate (one-shot), api, frontend
 - [x] Залежності: migrate чекає DB healthcheck, api чекає migrate completion
 - [x] Запуск однією командою: `docker compose up --build -d`
+- [x] Docker Desktop 4.78.0 встановлено (winget); daemon стартує через GUI (не CLI)
 
 ### Фаза 13 — Майбутнє (не реалізовано)
 - [ ] E2E тести handlers через `net/http/httptest`
