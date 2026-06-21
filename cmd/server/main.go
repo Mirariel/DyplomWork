@@ -70,6 +70,7 @@ func main() {
 	smartOrderRepo := models.NewSmartOrderRepository(db)
 	botRepo := models.NewBotRepository(db)
 	snapshotRepo := models.NewSnapshotRepository(db)
+	dcaBotRepo := models.NewDCABotRepository(db)
 
 	// Services
 	syncService := services.NewSyncService(db, enc, logger)
@@ -77,6 +78,7 @@ func main() {
 	smartOrderService := services.NewSmartOrderService(db, smartOrderRepo, orderRepo, portfolioRepo, priceService, enc, logger)
 	botService := services.NewBotService(botRepo, portfolioRepo, enc, logger)
 	analyticsService := services.NewAnalyticsService(db, snapshotRepo, logger)
+	dcaService := services.NewDCAService(dcaBotRepo, portfolioRepo, priceService, enc, logger)
 
 	// WebSocket
 	hub := ws.NewHub()
@@ -121,6 +123,11 @@ func main() {
 			Interval: 1 * time.Hour,
 			Fn:       analyticsService.TakeAllSnapshots,
 		},
+		scheduler.Job{
+			Name:     "dca-bots",
+			Interval: 5 * time.Minute,
+			Fn:       dcaService.CheckAndBuy,
+		},
 	)
 	sched.Start(ctx)
 
@@ -132,6 +139,7 @@ func main() {
 	smartOrderHandler := handlers.NewSmartOrderHandler(smartOrderRepo)
 	botHandler := handlers.NewBotHandler(botRepo, botService, priceService)
 	analyticsHandler := handlers.NewAnalyticsHandler(analyticsService, snapshotRepo)
+	dcaHandler := handlers.NewDCAHandler(dcaBotRepo, dcaService)
 
 	// App
 	app := fiber.New(fiber.Config{
@@ -218,11 +226,20 @@ func main() {
 	api.Delete("/bots/:id", botHandler.Delete)
 
 	// Analytics
-	analytics := api.Group("/analytics")
-	analytics.Get("/summary", analyticsHandler.Summary)
-	analytics.Get("/coins", analyticsHandler.Coins)
-	analytics.Get("/snapshots", analyticsHandler.Snapshots)
-	analytics.Post("/snapshot", analyticsHandler.TakeSnapshot)
+	analyticsGroup := api.Group("/analytics")
+	analyticsGroup.Get("/summary", analyticsHandler.Summary)
+	analyticsGroup.Get("/coins", analyticsHandler.Coins)
+	analyticsGroup.Get("/snapshots", analyticsHandler.Snapshots)
+	analyticsGroup.Post("/snapshot", analyticsHandler.TakeSnapshot)
+	analyticsGroup.Get("/arbitrage", analyticsHandler.Arbitrage)
+
+	// DCA Bots
+	api.Post("/dca", dcaHandler.Create)
+	api.Get("/dca", dcaHandler.List)
+	api.Get("/dca/:id", dcaHandler.Get)
+	api.Post("/dca/:id/start", dcaHandler.Start)
+	api.Post("/dca/:id/stop", dcaHandler.Stop)
+	api.Delete("/dca/:id", dcaHandler.Delete)
 
 	// WebSocket
 	app.Use("/ws", func(c *fiber.Ctx) error {

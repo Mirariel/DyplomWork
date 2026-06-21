@@ -30,11 +30,12 @@ Go дає нам goroutines, канали, і compile-time safety без overhea
 ### Фаза 4 — Smart Orders (Stop-Loss, Take-Profit, Trailing Stop) ✅ DONE
 ### Фаза 4 (залишок) — Grid Bot ✅ DONE
 ### Фаза 5 — Аналітика (Snapshots, TradeSummary, Coin Performance) ✅ DONE
+### Фаза 6 — DCA Bot, Arbitrage Scanner, Unit Tests ✅ DONE
 
 **Сервер зараз:** `http://localhost:8080` (Go + Fiber v2)
 **WebSocket:** `ws://localhost:8080/ws`
 **БД:** MySQL `tradetracker_go` (WAMP, порт 3306)
-**Міграція:** version 5 (portfolio_snapshots table) — застосовано ✅
+**Міграція:** version 6 (dca_bots table) — застосовано ✅
 
 ---
 
@@ -77,7 +78,8 @@ internal/
 │   ├── order.go             — Order struct + OrderRepository (Create/GetByID/List/UpdateStatus/MarkFailed)
 │   ├── smart_order.go       — SmartOrder struct + SmartOrderRepository (Create/ListActive/ListByUser/Cancel/MarkTriggered/UpdatePeak)
 │   ├── bot.go               — Bot + BotGrid structs + BotRepository (Create/ListRunning/UpdateGrid/AddProfit/CancelAllGrids)
-│   └── snapshot.go          — PortfolioSnapshot struct + SnapshotRepository (Upsert/ListByUser/AllUserIDs)
+│   ├── snapshot.go          — PortfolioSnapshot struct + SnapshotRepository (Upsert/ListByUser/AllUserIDs)
+│   └── dca_bot.go           — DCABot struct + DCABotRepository (Create/ListDue/RecordBuy/SetStatus)
 ├── handlers/
 │   ├── auth.go              — register/login/logout/me
 │   ├── portfolio.go         — CRUD credentials, comments, price update
@@ -85,7 +87,8 @@ internal/
 │   ├── order.go             — PlaceOrder/CancelOrder/GetOrder/ListOrders
 │   ├── smart_order.go       — Create/List/Get/Cancel для умовних ордерів
 │   ├── bot.go               — Create/List/Get/Start/Stop/Delete для grid-ботів
-│   └── analytics.go         — Summary/Coins/Snapshots/TakeSnapshot
+│   ├── analytics.go         — Summary/Coins/Snapshots/TakeSnapshot/Arbitrage
+│   └── dca.go               — Create/List/Get/Start/Stop/Delete для DCA ботів
 ├── cache/
 │   ├── cache.go             — PriceStorer interface (swap memory↔Redis без змін в сервісі)
 │   └── memory.go            — MemoryPriceStore (поточна реалізація)
@@ -100,7 +103,8 @@ internal/
 │   ├── price_service.go     — ціни через cache.PriceStorer + UpdateAllAssets()
 │   ├── smart_order_service.go — CheckAndTrigger: перевіряє SL/TP/Trailing кожні 5с, виконує market order
 │   ├── bot_service.go         — Start/Stop/CheckBots: grid bot lifecycle, counter orders кожні 10с
-│   ├── analytics_service.go   — TakeSnapshot/TakeAllSnapshots (scheduler 1h), GetTradeSummary, GetCoinPerformance
+│   ├── analytics_service.go   — TakeSnapshot/TakeAllSnapshots (1h), GetTradeSummary, GetCoinPerformance, GetArbitrage
+│   ├── dca_service.go         — Start/Stop/CheckAndBuy (5хв): market buy amount_usd/price qty
 │   └── exchange/
 │       ├── interface.go     — Exchange interface: Balance/Position/ClosedTrade + ErrNoCredentials
 │       ├── registry.go      — map[name]Exchange + compile-time check (6 бірж)
@@ -133,7 +137,9 @@ migrations/
 ├── 000004_bots.up.sql              — bots + bot_grids tables (grid bot lifecycle)
 ├── 000004_bots.down.sql            — DROP TABLE bot_grids, bots
 ├── 000005_analytics.up.sql         — portfolio_snapshots (daily portfolio value, spot+futures)
-└── 000005_analytics.down.sql       — DROP TABLE portfolio_snapshots
+├── 000005_analytics.down.sql       — DROP TABLE portfolio_snapshots
+├── 000006_dca_bots.up.sql          — dca_bots (amount_usd, interval_hours, next_buy_at)
+└── 000006_dca_bots.down.sql        — DROP TABLE dca_bots
 
 docs/
 ├── getting-started.md   — встановлення, конфігурація, перший запуск
@@ -189,6 +195,14 @@ GET    /api/analytics/summary             — winrate, avg PnL, profit factor, b
 GET    /api/analytics/coins               — статистика по кожній монеті (sorted by total_pnl)
 GET    /api/analytics/snapshots?days=30   — PnL по часу (для графіку)
 POST   /api/analytics/snapshot            — зробити snapshot зараз (без scheduler)
+GET    /api/analytics/arbitrage           — arbitrage scanner між біржами (?min_spread=0.5)
+
+POST   /api/dca                           — створити DCA бота
+GET    /api/dca                           — список DCA ботів
+GET    /api/dca/:id                       — один DCA бот
+POST   /api/dca/:id/start                 — запустити (?buy_now=true для негайної покупки)
+POST   /api/dca/:id/stop                  — зупинити
+DELETE /api/dca/:id                       — видалити зупиненого бота
 
 GET    /ws                                — WebSocket (потребує auth повідомлення)
 ```
@@ -222,11 +236,11 @@ GET    /ws                                — WebSocket (потребує auth �
 
 **Фази 0–4 завершені.** Переходимо до **Фази 4 (залишок — Grid Bot) або Фази 5 (Аналітика)**.
 
-### Фаза 6 — Тести та масштаб ← ПОЧАТИ ЗВІДСИ
+### Фаза 7 — Frontend або масштаб ← ДАЛІ
 
-1. **Тести** — unit для exchange helpers (parseFloat, hmacSHA256), integration для репозиторіїв
-2. **Arbitrage scanner** — порівняння цін між біржами в реальному часі
-3. **DCA Bot** — Dollar Cost Averaging стратегія
+1. **Frontend** — React + Vite дашборд (графіки, портфель, управління ботами)
+2. **Prometheus метрики** — /metrics ендпоінт
+3. **Push notifications** — Telegram bot для сповіщень про тригери
 
 ---
 
@@ -278,6 +292,14 @@ GET    /ws                                — WebSocket (потребує auth �
 - [x] AnalyticsHandler: GET summary/coins/snapshots + POST snapshot
 - [x] TradeSummary: winrate, avg_pnl, profit_factor, avg_win/loss, best/worst trade
 - [x] CoinPerformance: per-symbol/exchange breakdown, sorted by total_pnl
+
+### Фаза 6 — DCA Bot, Arbitrage Scanner, Unit Tests ✅ DONE
+- [x] DCABot model + DCABotRepository (migration 000006, ListDue/RecordBuy)
+- [x] DCAService: Start/Stop/CheckAndBuy кожні 5хв (qty = amount_usd / current_price)
+- [x] DCAHandler: POST/GET/Start/Stop/Delete /api/dca + ?buy_now=true
+- [x] ArbitrageScanner: GetArbitrage(minSpreadPct) — нормалізує USDT-пари, знаходить спреди між 6 біржами
+- [x] GET /api/analytics/arbitrage?min_spread=0.5
+- [x] Unit tests: exchange/helpers_test.go (hmac, sha512, normalizeSymbol), parse_test.go, ws/server_test.go (roundFloat)
 
 ### Фаза 5 — Аналітика
 - [ ] PnL графіки по часу (потрібна таблиця `portfolio_snapshots`)

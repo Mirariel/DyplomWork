@@ -3,24 +3,34 @@ package services
 import (
 	"context"
 	"log/slog"
+	"math"
+	"sort"
+	"strings"
 	"time"
 
 	"github.com/jmoiron/sqlx"
 	"github.com/okochadmytro/tradetracker/internal/models"
+	"github.com/okochadmytro/tradetracker/internal/services/exchange"
 )
 
-// AnalyticsService — генерує portfolio snapshots і статистику торгівлі.
+// AnalyticsService — генерує portfolio snapshots, статистику торгівлі та arbitrage сканер.
 //
 // TakeAllSnapshots — викликати щогодини через scheduler.
 // Snapshot розраховується з live-даних БД (user_portfolios + open_positions).
 type AnalyticsService struct {
 	db        *sqlx.DB
 	snapshots *models.SnapshotRepository
+	exchanges map[string]exchange.Exchange
 	logger    *slog.Logger
 }
 
 func NewAnalyticsService(db *sqlx.DB, snapshots *models.SnapshotRepository, logger *slog.Logger) *AnalyticsService {
-	return &AnalyticsService{db: db, snapshots: snapshots, logger: logger}
+	return &AnalyticsService{
+		db:        db,
+		snapshots: snapshots,
+		exchanges: exchange.Registry(),
+		logger:    logger,
+	}
 }
 
 // --- Snapshots ---
@@ -193,4 +203,108 @@ func (s *AnalyticsService) GetCoinPerformance(userID int64) ([]CoinPerformance, 
 		}
 	}
 	return rows, nil
+}
+
+// --- Arbitrage Scanner ---
+
+// ArbitrageOpportunity — різниця ціни одного символу між двома біржами.
+type ArbitrageOpportunity struct {
+	Symbol       string  `json:"symbol"`
+	BuyExchange  string  `json:"buy_exchange"`
+	BuyPrice     float64 `json:"buy_price"`
+	SellExchange string  `json:"sell_exchange"`
+	SellPrice    float64 `json:"sell_price"`
+	SpreadUSD    float64 `json:"spread_usd"`
+	SpreadPct    float64 `json:"spread_pct"`
+}
+
+// GetArbitrage сканує всі біржі і повертає можливості де різниця цін >= minSpreadPct%.
+// Ціни беруться з кешу (не робить нових HTTP запитів якщо кеш свіжий).
+func (s *AnalyticsService) GetArbitrage(minSpreadPct float64) []ArbitrageOpportunity {
+	// Збираємо ціни з усіх бірж паралельно
+	type exPrice struct {
+		name   string
+		prices map[string]float64
+	}
+	ch := make(chan exPrice, len(s.exchanges))
+
+	for name, ex := range s.exchanges {
+		go func(name string, ex exchange.Exchange) {
+			prices, err := ex.GetPrices(nil)
+			if err != nil {
+				ch <- exPrice{name: name, prices: map[string]float64{}}
+				return
+			}
+			ch <- exPrice{name: name, prices: prices}
+		}(name, ex)
+	}
+
+	byExchange := make(map[string]map[string]float64, len(s.exchanges))
+	for range s.exchanges {
+		r := <-ch
+		byExchange[r.name] = r.prices
+	}
+
+	// Нормалізуємо всі символи до базового тікера → {symbol: {exchange: price}}
+	normalized := make(map[string]map[string]float64)
+	for exName, prices := range byExchange {
+		for rawSym, price := range prices {
+			if price <= 0 {
+				continue
+			}
+			// Відкидаємо пари не в USDT
+			if !strings.HasSuffix(rawSym, "USDT") {
+				continue
+			}
+			base := strings.TrimSuffix(rawSym, "USDT")
+			if base == "" {
+				continue
+			}
+			if normalized[base] == nil {
+				normalized[base] = make(map[string]float64)
+			}
+			normalized[base][exName] = price
+		}
+	}
+
+	// Шукаємо арбітражні можливості
+	var opps []ArbitrageOpportunity
+	for symbol, prices := range normalized {
+		if len(prices) < 2 {
+			continue
+		}
+		// Знаходимо мінімальну і максимальну ціну
+		minPrice, maxPrice := math.MaxFloat64, 0.0
+		minEx, maxEx := "", ""
+		for exName, price := range prices {
+			if price < minPrice {
+				minPrice, minEx = price, exName
+			}
+			if price > maxPrice {
+				maxPrice, maxEx = price, exName
+			}
+		}
+		if minEx == maxEx || minPrice <= 0 {
+			continue
+		}
+		spreadPct := (maxPrice - minPrice) / minPrice * 100
+		if spreadPct < minSpreadPct {
+			continue
+		}
+		opps = append(opps, ArbitrageOpportunity{
+			Symbol:       symbol,
+			BuyExchange:  minEx,
+			BuyPrice:     minPrice,
+			SellExchange: maxEx,
+			SellPrice:    maxPrice,
+			SpreadUSD:    maxPrice - minPrice,
+			SpreadPct:    spreadPct,
+		})
+	}
+
+	// Сортуємо за спредом (найбільший першим)
+	sort.Slice(opps, func(i, j int) bool {
+		return opps[i].SpreadPct > opps[j].SpreadPct
+	})
+	return opps
 }

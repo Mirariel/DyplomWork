@@ -79,3 +79,21 @@ func (h *AnalyticsHandler) TakeSnapshot(c *fiber.Ctx) error {
 	}
 	return c.JSON(fiber.Map{"status": "ok"})
 }
+
+// GET /api/analytics/arbitrage?min_spread=0.5 — arbitrage scanner між біржами
+//
+// Параметри:
+//   - min_spread=0.5 (default) — мінімальний спред у відсотках
+//
+// Відповідь: масив можливостей, відсортованих за спредом DESC:
+//
+//	[{"symbol":"BTC","buy_exchange":"kraken","buy_price":67000,
+//	  "sell_exchange":"binance","sell_price":67400,"spread_usd":400,"spread_pct":0.6}]
+func (h *AnalyticsHandler) Arbitrage(c *fiber.Ctx) error {
+	minSpread := c.QueryFloat("min_spread", 0.5)
+	if minSpread < 0 || minSpread > 100 {
+		minSpread = 0.5
+	}
+	opps := h.analytics.GetArbitrage(minSpread)
+	return c.JSON(opps)
+}
