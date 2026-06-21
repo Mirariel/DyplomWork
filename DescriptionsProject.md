@@ -31,8 +31,10 @@ Go дає нам goroutines, канали, і compile-time safety без overhea
 ### Фаза 4 (залишок) — Grid Bot ✅ DONE
 ### Фаза 5 — Аналітика (Snapshots, TradeSummary, Coin Performance) ✅ DONE
 ### Фаза 6 — DCA Bot, Arbitrage Scanner, Unit Tests ✅ DONE
+### Фаза 7 — Frontend (React + Vite Dashboard) ✅ DONE
 
 **Сервер зараз:** `http://localhost:8080` (Go + Fiber v2)
+**Frontend:** `http://localhost:5173` (Vite dev), `npm run build` → dist/
 **WebSocket:** `ws://localhost:8080/ws`
 **БД:** MySQL `tradetracker_go` (WAMP, порт 3306)
 **Міграція:** version 6 (dca_bots table) — застосовано ✅
@@ -126,6 +128,31 @@ internal/
     ├── client.go            — ReadPump + WritePump goroutines, JWT auth
     ├── server.go            — broadcast loop 2s: ціни + позиції per user
     └── handler.go           — Fiber WebSocket upgrade middleware
+
+frontend/                       ← React + Vite + TypeScript dashboard
+├── package.json                — залежності (React 18, Vite 6, Tailwind 4, React Query 5, Recharts, Lucide, Axios)
+├── vite.config.ts              — proxy /api → :8080, /ws → ws://:8080, Tailwind plugin
+├── tsconfig.json               — strict TS, bundler module resolution
+├── index.html
+└── src/
+    ├── main.tsx                — React root + QueryClientProvider
+    ├── index.css               — Tailwind v4 import + dark body defaults
+    ├── vite-env.d.ts           — CSS module type declarations
+    ├── App.tsx                 — BrowserRouter + RequireAuth + всі маршрути
+    ├── api.ts                  — axios instance + 30+ типізованих API функцій
+    ├── ws.ts                   — useWebSocket hook (auto-reconnect 3s, JWT auth on connect)
+    ├── context/AuthContext.tsx — JWT в localStorage("tt_token"), login/logout
+    ├── components/Layout.tsx   — dark sidebar з 7 навлінками (Lucide icons), hamburger
+    └── pages/
+        ├── Login.tsx           — логін форма
+        ├── Register.tsx        — реєстрація форма
+        ├── Dashboard.tsx       — stat cards, live prices (WS), positions table (WS), PnL chart (Recharts)
+        ├── Portfolio.tsx       — 3 таби: Positions, History (pagination), Credentials (CRUD)
+        ├── Orders.tsx          — форма ордера + список з Cancel
+        ├── SmartOrders.tsx     — форма SL/TP/Trailing + список з Cancel
+        ├── GridBots.tsx        — форма + картки ботів (Start/Stop/Delete + grid levels)
+        ├── DCABots.tsx         — форма + картки ботів (Start+BuyNow/Stop/Delete)
+        └── Analytics.tsx       — Trade Summary cards, Coin Performance table, Arbitrage Scanner
 
 migrations/
 ├── 000001_initial_schema.up.sql    — CREATE TABLE × 7 + 34 початкові активи
@@ -234,13 +261,15 @@ GET    /ws                                — WebSocket (потребує auth �
 
 ## З чого почати наступну сесію
 
-**Фази 0–4 завершені.** Переходимо до **Фази 4 (залишок — Grid Bot) або Фази 5 (Аналітика)**.
+**Фази 0–7 завершені.** Проєкт повністю функціональний.
 
-### Фаза 7 — Frontend або масштаб ← ДАЛІ
+### Можливі наступні кроки
 
-1. **Frontend** — React + Vite дашборд (графіки, портфель, управління ботами)
-2. **Prometheus метрики** — /metrics ендпоінт
-3. **Push notifications** — Telegram bot для сповіщень про тригери
+1. **Prometheus метрики** — /metrics ендпоінт (запити, latency, активні боти)
+2. **Telegram bot** — push-сповіщення про тригери smart orders і DCA
+3. **Frontend code splitting** — динамічні імпорти (зараз bundle 725 kB, рекомендовано < 500 kB)
+4. **Інтеграційні тести** — тестування репозиторіїв проти реальної БД
+5. **getUserCreds рефактор** — консолідувати в shared helper (tech debt P-014)
 
 ---
 

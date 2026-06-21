@@ -504,3 +504,46 @@ if _, err := stmt.Exec(price, sym); err != nil {
 цикл — мінімум логуємо.
 
 **Зачеплені файли:** `services/price_service.go`
+
+---
+
+## P-019 — Невідповідність типів між WS LivePosition і DB Position
+
+**Коли:** Реалізація React frontend (Фаза 7).
+
+**Проблема:**
+WS сервер надсилає `LivePosition` (поля: `entry_price`, `pnl`, `pnl_pct`, немає `id`),
+а frontend спочатку типізував WS дані як DB `Position` (поля: `avg_price`, `unrealized_pnl`, `id`).
+Також WS повідомлення мало `type: "update"` з полями `positions` і `spot_prices`,
+але хук очікував `type: "positions"` і `type: "prices"` зі вкладеним `.data`.
+
+**Рішення:**
+1. Додали окремий `LivePosition` інтерфейс в `api.ts` з полями WS сервера.
+2. Оновили `ws.ts` щоб повертати `LivePosition[]` замість `Position[]`.
+3. Виправили парсинг повідомлень: `type === 'update'` → читати `msg.positions` і `msg.spot_prices`.
+
+**Урок:** WS і REST API повертають різні структури для "позицій" — WS оптимізований для live дисплею
+(розрахований PnL, entry_price), REST — для CRUD (avg_price, unreалізований PnL з БД).
+
+**Зачеплені файли:** `frontend/src/ws.ts`, `frontend/src/api.ts`, `frontend/src/pages/Dashboard.tsx`
+
+---
+
+## P-020 — Невірні URL ендпоінтів в api.ts
+
+**Коли:** Реалізація React frontend (Фаза 7).
+
+**Проблема:**
+Кілька URL в API-клієнті не збігались з маршрутами backend:
+- `cancelOrder` → POST `/orders/:id/cancel` (мало бути DELETE `/orders/:id`)
+- `cancelSmartOrder` → POST `/smart-orders/:id/cancel` (мало бути DELETE `/smart-orders/:id`)
+- `takeSnapshot` → POST `/analytics/snapshots` (мало бути POST `/analytics/snapshot`)
+- `updatePositionComment` → `/portfolio/positions/:id/comment` (мало бути `/positions/:id/comment`)
+- `syncHistory` відправляв `{ days }` в body (мало бути query param)
+- `updatePrices` → POST (мало бути GET `/sync/prices`)
+
+**Рішення:** Виправили кожен URL/метод відповідно до маршрутів в `main.go`.
+
+**Урок:** Завжди звіряти URL фронту з `main.go` — вони можуть розходитись після рефакторингу.
+
+**Зачеплені файли:** `frontend/src/api.ts`
