@@ -1,0 +1,100 @@
+services:
+
+  # ── MySQL ────────────────────────────────────────────────────────────────────
+  db:
+    image: mysql:8.0
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: ${DB_PASSWORD:-tradetracker}
+      MYSQL_DATABASE:      ${DB_NAME:-tradetracker}
+    ports:
+      - "3306:3306"
+    volumes:
+      - mysql_data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost",
+             "-u", "root", "-p${DB_PASSWORD:-tradetracker}"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+    networks:
+      - tradetracker
+
+  # ── Redis (price cache) ───────────────────────────────────────────────────────
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    networks:
+      - tradetracker
+
+  # ── DB migrations (one-shot, exits after UP) ──────────────────────────────────
+  migrate:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: ["./migrate", "-cmd", "up"]
+    environment:
+      DB_HOST:     db
+      DB_PORT:     3306
+      DB_USER:     root
+      DB_PASSWORD: ${DB_PASSWORD:-tradetracker}
+      DB_NAME:     ${DB_NAME:-tradetracker}
+    depends_on:
+      db:
+        condition: service_healthy
+    networks:
+      - tradetracker
+    restart: "no"
+
+  # ── Go API ───────────────────────────────────────────────────────────────────
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    environment:
+      APP_PORT:  8080
+      APP_DEBUG: ${APP_DEBUG:-false}
+
+      JWT_SECRET: ${JWT_SECRET:-change-me-in-production-32chars}
+      APP_KEY:    ${APP_KEY:-change-me-32-character-key-here!}
+
+      DB_HOST:     db
+      DB_PORT:     3306
+      DB_USER:     root
+      DB_PASSWORD: ${DB_PASSWORD:-tradetracker}
+      DB_NAME:     ${DB_NAME:-tradetracker}
+
+      REDIS_URL: redis:6379
+
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
+      TELEGRAM_CHAT_ID:   ${TELEGRAM_CHAT_ID:-}
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    networks:
+      - tradetracker
+
+  # ── React frontend (nginx) ────────────────────────────────────────────────────
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    ports:
+      - "80:80"
+    depends_on:
+      - api
+    networks:
+      - tradetracker
+
+volumes:
+  mysql_data:
+
+networks:
+  tradetracker:
+    driver: bridge
