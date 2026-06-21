@@ -211,7 +211,10 @@ func (h *OrderHandler) GetOrder(c *fiber.Ctx) error {
 		return c.JSON(dbOrder)
 	}
 
-	ex := h.exchanges[dbOrder.Exchange]
+	ex, ok := h.exchanges[dbOrder.Exchange]
+	if !ok {
+		return c.JSON(dbOrder)
+	}
 	trader, ok := ex.(exchange.Trader)
 	if !ok {
 		return c.JSON(dbOrder)

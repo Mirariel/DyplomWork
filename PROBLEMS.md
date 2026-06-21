@@ -403,3 +403,104 @@ func ResolveCredentials(portfolio *models.PortfolioRepository, enc *EncryptionSe
 не брати готові з HTTP-фреймворків.
 
 **Зачеплені файли:** `services/exchange/interface.go`, `services/smart_order_service.go`
+
+---
+
+## P-016 — `GetLivePrices(nil)` завжди повертав порожній map
+
+**Коли:** Аудит коду після Фази 4.
+
+**Проблема:**
+`ws/server.go` викликав `s.prices.GetLivePrices(nil)` кожні 2 секунди для broadcast.
+Але `GetLivePrices` ітерував по `symbols` — якщо nil, цикл не виконувався і повертався порожній map.
+Всі WS-клієнти отримували `"spot_prices": {}` — порожній об'єкт.
+
+```go
+// price_service.go — стара логіка
+result := make(map[string]float64, len(symbols))
+for _, sym := range symbols { // nil → 0 ітерацій
+    ...
+}
+return result // {} завжди
+```
+
+**Рішення:**
+В `GetLivePrices`: якщо `len(symbols) == 0` — повертати всі доступні ціни з кешу:
+```go
+if len(symbols) == 0 {
+    result := make(map[string]float64)
+    for _, prices := range allPrices {
+        for sym, price := range prices {
+            if price > 0 && !stables[sym] { result[sym] = price }
+        }
+    }
+    return result
+}
+```
+
+**Урок:** API де nil і [] мають різну семантику — задокументувати явно в коментарі до функції.
+Бажано мати тест на цей сценарій.
+
+**Зачеплені файли:** `services/price_service.go`, `ws/server.go`
+
+---
+
+## P-017 — `roundFloat()` давав невірні результати для від'ємних чисел
+
+**Коли:** Аудит коду після Фази 4.
+
+**Проблема:**
+```go
+// Стара реалізація в ws/server.go
+func roundFloat(v float64, decimals int) float64 {
+    pow := 1.0
+    for range decimals { pow *= 10 }
+    return float64(int(v*pow+0.5)) / pow  // BUG!
+}
+```
+Для від'ємного `v = -5.555`, decimals=2:
+`int(-5.555*100 + 0.5)` = `int(-555.0)` = `-555` → результат `-5.55`
+Очікувалось `-5.56`.
+
+Усі від'ємні PnL% (збиткові позиції) відображались з похибкою округлення.
+
+**Рішення:**
+```go
+func roundFloat(v float64, decimals int) float64 {
+    pow := math.Pow(10, float64(decimals))
+    return math.Round(v*pow) / pow
+}
+```
+`math.Round` коректно обробляє від'ємні числа (round half away from zero).
+
+**Урок:** Ніколи не використовувати `int(v + 0.5)` для округлення — це класична пастка.
+Завжди `math.Round()`.
+
+**Зачеплені файли:** `ws/server.go`
+
+---
+
+## P-018 — `stmt.Exec` помилки ігнорувались в `UpdatePrices`
+
+**Коли:** Аудит коду після Фази 4.
+
+**Проблема:**
+```go
+// price_service.go
+stmt.Exec(1.0, sym)     // повертає (sql.Result, error) — error ігнорується
+stmt.Exec(price, sym)   // те саме
+```
+Якщо оновлення ціни в БД провалювалось (з'єднання, таймаут, дедлок) — помилка
+ковталась мовчки. Стейлі дані в БД, ніякого лога.
+
+**Рішення:**
+```go
+if _, err := stmt.Exec(price, sym); err != nil {
+    ps.logger.Error("prices: update failed", "symbol", sym, "error", err)
+}
+```
+
+**Урок:** Ніколи не ігнорувати повернені помилки з `Exec`. Навіть якщо не хочемо зупиняти
+цикл — мінімум логуємо.
+
+**Зачеплені файли:** `services/price_service.go`

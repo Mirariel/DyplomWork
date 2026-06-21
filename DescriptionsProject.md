@@ -28,11 +28,12 @@ Go дає нам goroutines, канали, і compile-time safety без overhea
 ### Фаза 2 — Production-ready backend ✅ DONE
 ### Фаза 3 — Торгівля (Binance + OKX + Bybit PlaceOrder/Cancel/Status) ✅ DONE
 ### Фаза 4 — Smart Orders (Stop-Loss, Take-Profit, Trailing Stop) ✅ DONE
+### Фаза 4 (залишок) — Grid Bot ✅ DONE
 
 **Сервер зараз:** `http://localhost:8080` (Go + Fiber v2)
 **WebSocket:** `ws://localhost:8080/ws`
 **БД:** MySQL `tradetracker_go` (WAMP, порт 3306)
-**Міграція:** version 3 (smart_orders table) — застосовано ✅
+**Міграція:** version 4 (bots + bot_grids tables) — застосовано ✅
 
 ---
 
@@ -73,13 +74,15 @@ internal/
 │   │                          PositionHistory, ExternalApiCredential,
 │   │                          PortfolioRepository
 │   ├── order.go             — Order struct + OrderRepository (Create/GetByID/List/UpdateStatus/MarkFailed)
-│   └── smart_order.go       — SmartOrder struct + SmartOrderRepository (Create/ListActive/ListByUser/Cancel/MarkTriggered/UpdatePeak)
+│   ├── smart_order.go       — SmartOrder struct + SmartOrderRepository (Create/ListActive/ListByUser/Cancel/MarkTriggered/UpdatePeak)
+│   └── bot.go               — Bot + BotGrid structs + BotRepository (Create/ListRunning/UpdateGrid/AddProfit/CancelAllGrids)
 ├── handlers/
 │   ├── auth.go              — register/login/logout/me
 │   ├── portfolio.go         — CRUD credentials, comments, price update
 │   ├── sync.go              — full/positions/history/prices sync endpoints
 │   ├── order.go             — PlaceOrder/CancelOrder/GetOrder/ListOrders
-│   └── smart_order.go       — Create/List/Get/Cancel для умовних ордерів
+│   ├── smart_order.go       — Create/List/Get/Cancel для умовних ордерів
+│   └── bot.go               — Create/List/Get/Start/Stop/Delete для grid-ботів
 ├── cache/
 │   ├── cache.go             — PriceStorer interface (swap memory↔Redis без змін в сервісі)
 │   └── memory.go            — MemoryPriceStore (поточна реалізація)
@@ -93,6 +96,7 @@ internal/
 │   ├── sync_repository.go   — всі SQL для синку (upsert, cleanup, transfer)
 │   ├── price_service.go     — ціни через cache.PriceStorer + UpdateAllAssets()
 │   ├── smart_order_service.go — CheckAndTrigger: перевіряє SL/TP/Trailing кожні 5с, виконує market order
+│   ├── bot_service.go         — Start/Stop/CheckBots: grid bot lifecycle, counter orders кожні 10с
 │   └── exchange/
 │       ├── interface.go     — Exchange interface: Balance/Position/ClosedTrade + ErrNoCredentials
 │       ├── registry.go      — map[name]Exchange + compile-time check (6 бірж)
@@ -121,7 +125,9 @@ migrations/
 ├── 000002_orders.up.sql            — orders table (статуси, exchange_order_id)
 ├── 000002_orders.down.sql          — DROP TABLE orders
 ├── 000003_smart_orders.up.sql      — smart_orders table (SL/TP/Trailing, peak_price, callback_rate)
-└── 000003_smart_orders.down.sql    — DROP TABLE smart_orders
+├── 000003_smart_orders.down.sql    — DROP TABLE smart_orders
+├── 000004_bots.up.sql              — bots + bot_grids tables (grid bot lifecycle)
+└── 000004_bots.down.sql            — DROP TABLE bot_grids, bots
 
 docs/
 ├── getting-started.md   — встановлення, конфігурація, перший запуск
@@ -166,6 +172,13 @@ GET    /api/smart-orders                  — список умовних орд
 GET    /api/smart-orders/:id              — один умовний ордер
 DELETE /api/smart-orders/:id              — скасувати умовний ордер
 
+POST   /api/bots                          — створити grid-бота
+GET    /api/bots                          — список ботів
+GET    /api/bots/:id                      — бот + рівні сітки
+POST   /api/bots/:id/start                — запустити бота (виставляє ордери)
+POST   /api/bots/:id/stop                 — зупинити бота (скасовує ордери)
+DELETE /api/bots/:id                      — видалити зупиненого бота
+
 GET    /ws                                — WebSocket (потребує auth повідомлення)
 ```
 
@@ -198,14 +211,11 @@ GET    /ws                                — WebSocket (потребує auth �
 
 **Фази 0–4 завершені.** Переходимо до **Фази 4 (залишок — Grid Bot) або Фази 5 (Аналітика)**.
 
-### Фаза 4 залишок — Grid Bot ← ПОЧАТИ ЗВІДСИ
+### Фаза 5 — Аналітика ← ПОЧАТИ ЗВІДСИ
 
-1. **Grid Bot** — goroutine per bot, стан в БД
-   Нова таблиця `bots` + `bot_grids` (нова міграція),
-   новий сервіс `internal/services/bot_service.go`.
-   Бот розміщує limit ордери на рівнях сітки, поповнює сітку при виконанні.
-
-2. **Тести** — unit для exchange helpers (parseFloat, hmacSHA256), integration для OrderRepository.
+1. **portfolio_snapshots** — щоденний snapshot через scheduler, основа для PnL-графіків
+2. **PnL аналітика** — winrate, середній PnL, найкращі/гірші монети
+3. **Тести** — unit для exchange helpers (parseFloat, hmacSHA256), integration для OrderRepository
 
 ### Фаза 5 — Аналітика
 - `portfolio_snapshots` таблиця (щоденний snapshot через scheduler)
@@ -218,7 +228,7 @@ GET    /ws                                — WebSocket (потребує auth �
 
 | Проблема | Файл | Пріоритет |
 |---|---|---|
-| `getUserCreds` продубльовано в handler і smart_order_service | `handlers/order.go`, `services/smart_order_service.go` | 🟡 MEDIUM |
+| `getUserCreds` продубльовано в handler, smart_order_service, bot_service, ws/server | скрізь | 🟡 MEDIUM |
 | `GetLivePrices(nil)` — витягує всі ціни замість потрібних | `ws/server.go` | 🟡 MEDIUM |
 | Немає жодного тесту | весь проєкт | 🟡 MEDIUM |
 | `gorilla/websocket` в go.mod — не використовується | `go.mod` | 🟢 LOW |
@@ -250,7 +260,10 @@ GET    /ws                                — WebSocket (потребує auth �
 - [x] SmartOrderService: CheckAndTrigger кожні 5с — SL/TP/Trailing логіка
 - [x] SmartOrderHandler: POST/GET/DELETE /api/smart-orders
 - [x] ErrNoCredentials sentinel error в exchange пакеті
-- [ ] Grid Bot (goroutine per bot, стан в БД, таблиці bots + bot_grids)
+- [x] Grid Bot: Bot + BotGrid models, BotRepository (migration 000004)
+- [x] BotService: Start/Stop/CheckBots кожні 10с, counter orders після fill
+- [x] BotHandler: POST/GET/Start/Stop/Delete /api/bots
+- [x] Bugfix аудит: GetLivePrices(nil), roundFloat, stmt.Exec errors, nil pointer GetOrder
 - [ ] DCA Bot
 
 ### Фаза 5 — Аналітика

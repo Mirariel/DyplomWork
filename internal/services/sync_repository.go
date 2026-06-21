@@ -119,14 +119,16 @@ func (r *syncRepository) transferCommentsToHistory(userID int64, syncStart time.
 	}
 
 	for _, p := range stale {
-		r.db.Exec(`
+		if _, err := r.db.Exec(`
 			UPDATE position_history
 			SET comment = ?
 			WHERE user_id = ? AND symbol = ? AND side = ? AND exchange = ?
 			  AND (comment IS NULL OR comment = '')
 			ORDER BY closed_at DESC
 			LIMIT 1
-		`, p.Comment, userID, p.Symbol, p.Side, p.Exchange)
+		`, p.Comment, userID, p.Symbol, p.Side, p.Exchange); err != nil {
+			return err
+		}
 	}
 	return nil
 }

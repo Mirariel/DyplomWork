@@ -68,11 +68,13 @@ func main() {
 	portfolioRepo := models.NewPortfolioRepository(db)
 	orderRepo := models.NewOrderRepository(db)
 	smartOrderRepo := models.NewSmartOrderRepository(db)
+	botRepo := models.NewBotRepository(db)
 
 	// Services
 	syncService := services.NewSyncService(db, enc, logger)
 	priceService := services.NewPriceService(db, priceStore, logger)
 	smartOrderService := services.NewSmartOrderService(db, smartOrderRepo, orderRepo, portfolioRepo, priceService, enc, logger)
+	botService := services.NewBotService(botRepo, portfolioRepo, enc, logger)
 
 	// WebSocket
 	hub := ws.NewHub()
@@ -107,6 +109,11 @@ func main() {
 			Interval: 5 * time.Second,
 			Fn:       smartOrderService.CheckAndTrigger,
 		},
+		scheduler.Job{
+			Name:     "grid-bots",
+			Interval: 10 * time.Second,
+			Fn:       botService.CheckBots,
+		},
 	)
 	sched.Start(ctx)
 
@@ -116,6 +123,7 @@ func main() {
 	syncHandler := handlers.NewSyncHandler(syncService, priceService, portfolioRepo)
 	orderHandler := handlers.NewOrderHandler(orderRepo, portfolioRepo, enc, logger)
 	smartOrderHandler := handlers.NewSmartOrderHandler(smartOrderRepo)
+	botHandler := handlers.NewBotHandler(botRepo, botService, priceService)
 
 	// App
 	app := fiber.New(fiber.Config{
@@ -192,6 +200,14 @@ func main() {
 	api.Get("/smart-orders", smartOrderHandler.List)
 	api.Get("/smart-orders/:id", smartOrderHandler.Get)
 	api.Delete("/smart-orders/:id", smartOrderHandler.Cancel)
+
+	// Grid Bots
+	api.Post("/bots", botHandler.Create)
+	api.Get("/bots", botHandler.List)
+	api.Get("/bots/:id", botHandler.Get)
+	api.Post("/bots/:id/start", botHandler.Start)
+	api.Post("/bots/:id/stop", botHandler.Stop)
+	api.Delete("/bots/:id", botHandler.Delete)
 
 	// WebSocket
 	app.Use("/ws", func(c *fiber.Ctx) error {

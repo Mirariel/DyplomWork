@@ -55,11 +55,15 @@ func (ps *PriceService) UpdatePrices(symbols []string) error {
 	for _, sym := range symbols {
 		search := strings.ReplaceAll(sym, "-", "")
 		if stables[search] {
-			stmt.Exec(1.0, sym)
+			if _, err := stmt.Exec(1.0, sym); err != nil {
+				ps.logger.Error("prices: update stable failed", "symbol", sym, "error", err)
+			}
 			continue
 		}
 		if price := ps.resolvePrice(search, allPrices); price > 0 {
-			stmt.Exec(price, sym)
+			if _, err := stmt.Exec(price, sym); err != nil {
+				ps.logger.Error("prices: update failed", "symbol", sym, "price", price, "error", err)
+			}
 		}
 	}
 	return nil
@@ -76,15 +80,29 @@ func (ps *PriceService) UpdateAllAssets() error {
 }
 
 // GetLivePrices повертає поточні ціни для набору символів без запису в БД.
+// Якщо symbols порожній або nil — повертає всі ціни з кешу (для WS broadcast).
 // Використовується для WebSocket real-time оновлень.
 func (ps *PriceService) GetLivePrices(symbols []string) map[string]float64 {
 	allPrices := ps.fetchAllPrices()
-	result := make(map[string]float64, len(symbols))
 
 	stables := map[string]bool{
 		"USDT": true, "USDC": true, "DAI": true, "FDUSD": true, "BUSD": true,
 	}
 
+	// Якщо символи не задані — повертаємо всі доступні ціни з кешу
+	if len(symbols) == 0 {
+		result := make(map[string]float64)
+		for _, prices := range allPrices {
+			for sym, price := range prices {
+				if price > 0 && !stables[sym] {
+					result[sym] = price
+				}
+			}
+		}
+		return result
+	}
+
+	result := make(map[string]float64, len(symbols))
 	for _, sym := range symbols {
 		search := strings.ReplaceAll(sym, "-", "")
 		if stables[search] {

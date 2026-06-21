@@ -1,0 +1,2 @@
+DROP TABLE IF EXISTS bot_grids;
+DROP TABLE IF EXISTS bots;

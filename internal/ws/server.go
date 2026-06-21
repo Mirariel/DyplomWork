@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"math"
 	"sync"
 	"time"
 
@@ -236,16 +237,6 @@ func formatLeverage(lev int) string {
 }
 
 func roundFloat(v float64, decimals int) float64 {
-	pow := 1.0
-	for range decimals {
-		pow *= 10
-	}
-	return float64(int(v*pow+0.5)) / pow
-}
-
-func max(a, b int) int {
-	if a > b {
-		return a
-	}
-	return b
+	pow := math.Pow(10, float64(decimals))
+	return math.Round(v*pow) / pow
 }
