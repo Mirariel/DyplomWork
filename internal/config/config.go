@@ -27,10 +27,17 @@ type Config struct {
 	RedisURL string
 
 	// Telegram — необов'язкові. Якщо порожні — сповіщення вимкнені.
-	// TelegramToken: токен бота від @BotFather
-	// TelegramChatID: chat_id користувача або групи
 	TelegramToken  string
 	TelegramChatID string
+
+	// NATS — брокер повідомлень між сервісами.
+	// Формат: "nats://host:4222"
+	NatsURL string
+
+	// Внутрішні URL сервісів (використовуються api-gateway для проксування).
+	MarketDataURL string
+	TradingURL    string
+	AnalyticsURL  string
 }
 
 func Load() *Config {
@@ -55,6 +62,12 @@ func Load() *Config {
 
 		TelegramToken:  getEnv("TELEGRAM_BOT_TOKEN", ""),
 		TelegramChatID: getEnv("TELEGRAM_CHAT_ID", ""),
+
+		NatsURL: getEnv("NATS_URL", "nats://localhost:4222"),
+
+		MarketDataURL: getEnv("MARKET_DATA_URL", "http://localhost:8081"),
+		TradingURL:    getEnv("TRADING_URL",     "http://localhost:8082"),
+		AnalyticsURL:  getEnv("ANALYTICS_URL",   "http://localhost:8083"),
 	}
 }
 
