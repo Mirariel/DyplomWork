@@ -353,3 +353,53 @@ Kraken: Base64(HMAC-SHA512(path+SHA256(nonce+data), Base64Decode(secret))).
 Використано прапорець `--no-interactive` (або запуск через `npx -y` з чітким вказанням параметрів).
 
 **Урок:** Для повної неінтерактивності в сучасних версіях Vite CLI потрібно додавати `--no-interactive`.
+
+---
+
+## P-014 — `getUserCreds` дублюється між `OrderHandler` і `SmartOrderService`
+
+**Коли:** Реалізація SmartOrderService (Фаза 4).
+
+**Проблема:**
+Логіка розшифрування credentials (GetCredentials → знайти по exchange → Decrypt key/secret/passphrase)
+вже була написана в `handlers/order.go` як приватний метод `getUserCreds`.
+При реалізації `SmartOrderService` довелось продублювати ту саму логіку в сервісному шарі,
+бо handler-метод недоступний за межами пакету.
+
+**Рішення (тимчасове):** Дублювання залишено — код коректний, просто не DRY.
+
+**Рішення (правильне — рефакторинг):**
+Винести `getUserCreds` в окремий хелпер або метод `PortfolioRepository`:
+```go
+// internal/services/credentials.go
+func ResolveCredentials(portfolio *models.PortfolioRepository, enc *EncryptionService,
+    userID int64, exchangeName string) (exchange.Credentials, error) { ... }
+```
+Тоді і handler, і сервіс використовують одну функцію.
+
+**Урок:** Логіка що потрібна і в handlers, і в services — належить до services або shared helpers,
+не до handler-методів.
+
+**Зачеплені файли:** `handlers/order.go`, `services/smart_order_service.go`
+
+---
+
+## P-015 — `ErrNoCredentials` не існував в пакеті exchange
+
+**Коли:** Реалізація `SmartOrderService.getUserCreds` (Фаза 4).
+
+**Проблема:**
+`SmartOrderService.getUserCreds` повертає помилку коли credentials не знайдено.
+`handlers/order.go` використовував `fiber.ErrNotFound` як sentinel error — але це fiber-специфічна
+помилка яку некоректно використовувати в сервісному шарі (порушує залежності: service → http framework).
+
+**Рішення:**
+Додано `var ErrNoCredentials = errors.New("no active credentials found for exchange")`
+в `internal/services/exchange/interface.go` — нейтральне місце без зовнішніх залежностей.
+`SmartOrderService` повертає `exchange.ErrNoCredentials`, handler залишив `fiber.ErrNotFound` (прийнятно
+бо він у http-шарі).
+
+**Урок:** Sentinel errors для доменної логіки визначати в exchange/domain пакеті,
+не брати готові з HTTP-фреймворків.
+
+**Зачеплені файли:** `services/exchange/interface.go`, `services/smart_order_service.go`

@@ -63,14 +63,16 @@ func main() {
 		logger.Info("price cache: in-memory")
 	}
 
-	// Services
-	syncService := services.NewSyncService(db, enc, logger)
-	priceService := services.NewPriceService(db, priceStore, logger)
-
 	// Repositories
 	userRepo := models.NewUserRepository(db)
 	portfolioRepo := models.NewPortfolioRepository(db)
 	orderRepo := models.NewOrderRepository(db)
+	smartOrderRepo := models.NewSmartOrderRepository(db)
+
+	// Services
+	syncService := services.NewSyncService(db, enc, logger)
+	priceService := services.NewPriceService(db, priceStore, logger)
+	smartOrderService := services.NewSmartOrderService(db, smartOrderRepo, orderRepo, portfolioRepo, priceService, enc, logger)
 
 	// WebSocket
 	hub := ws.NewHub()
@@ -100,6 +102,11 @@ func main() {
 				syncService.SyncAllUsers()
 			},
 		},
+		scheduler.Job{
+			Name:     "smart-orders",
+			Interval: 5 * time.Second,
+			Fn:       smartOrderService.CheckAndTrigger,
+		},
 	)
 	sched.Start(ctx)
 
@@ -108,6 +115,7 @@ func main() {
 	portfolioHandler := handlers.NewPortfolioHandler(portfolioRepo, enc)
 	syncHandler := handlers.NewSyncHandler(syncService, priceService, portfolioRepo)
 	orderHandler := handlers.NewOrderHandler(orderRepo, portfolioRepo, enc, logger)
+	smartOrderHandler := handlers.NewSmartOrderHandler(smartOrderRepo)
 
 	// App
 	app := fiber.New(fiber.Config{
@@ -178,6 +186,12 @@ func main() {
 	api.Get("/orders", orderHandler.ListOrders)
 	api.Get("/orders/:id", orderHandler.GetOrder)
 	api.Delete("/orders/:id", orderHandler.CancelOrder)
+
+	// Smart Orders
+	api.Post("/smart-orders", smartOrderHandler.Create)
+	api.Get("/smart-orders", smartOrderHandler.List)
+	api.Get("/smart-orders/:id", smartOrderHandler.Get)
+	api.Delete("/smart-orders/:id", smartOrderHandler.Cancel)
 
 	// WebSocket
 	app.Use("/ws", func(c *fiber.Ctx) error {

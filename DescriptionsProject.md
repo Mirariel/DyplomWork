@@ -27,11 +27,12 @@ Go дає нам goroutines, канали, і compile-time safety без overhea
 ### Фаза 1 (залишок) — Rate limiting, slog, graceful shutdown ✅ DONE
 ### Фаза 2 — Production-ready backend ✅ DONE
 ### Фаза 3 — Торгівля (Binance + OKX + Bybit PlaceOrder/Cancel/Status) ✅ DONE
+### Фаза 4 — Smart Orders (Stop-Loss, Take-Profit, Trailing Stop) ✅ DONE
 
 **Сервер зараз:** `http://localhost:8080` (Go + Fiber v2)
 **WebSocket:** `ws://localhost:8080/ws`
 **БД:** MySQL `tradetracker_go` (WAMP, порт 3306)
-**Міграція:** version 2 (orders table) — потрібно застосувати `go run ./cmd/migrate/... up`
+**Міграція:** version 3 (smart_orders table) — застосовано ✅
 
 ---
 
@@ -71,12 +72,14 @@ internal/
 │   ├── portfolio.go         — Asset, UserPortfolio, OpenPosition,
 │   │                          PositionHistory, ExternalApiCredential,
 │   │                          PortfolioRepository
-│   └── order.go             — Order struct + OrderRepository (Create/GetByID/List/UpdateStatus/MarkFailed)
+│   ├── order.go             — Order struct + OrderRepository (Create/GetByID/List/UpdateStatus/MarkFailed)
+│   └── smart_order.go       — SmartOrder struct + SmartOrderRepository (Create/ListActive/ListByUser/Cancel/MarkTriggered/UpdatePeak)
 ├── handlers/
 │   ├── auth.go              — register/login/logout/me
 │   ├── portfolio.go         — CRUD credentials, comments, price update
 │   ├── sync.go              — full/positions/history/prices sync endpoints
-│   └── order.go             — PlaceOrder/CancelOrder/GetOrder/ListOrders
+│   ├── order.go             — PlaceOrder/CancelOrder/GetOrder/ListOrders
+│   └── smart_order.go       — Create/List/Get/Cancel для умовних ордерів
 ├── cache/
 │   ├── cache.go             — PriceStorer interface (swap memory↔Redis без змін в сервісі)
 │   └── memory.go            — MemoryPriceStore (поточна реалізація)
@@ -89,8 +92,9 @@ internal/
 │   ├── sync_service.go      — паралельний синк + SyncAllUsers() для scheduler
 │   ├── sync_repository.go   — всі SQL для синку (upsert, cleanup, transfer)
 │   ├── price_service.go     — ціни через cache.PriceStorer + UpdateAllAssets()
+│   ├── smart_order_service.go — CheckAndTrigger: перевіряє SL/TP/Trailing кожні 5с, виконує market order
 │   └── exchange/
-│       ├── interface.go     — Exchange interface: Balance/Position/ClosedTrade
+│       ├── interface.go     — Exchange interface: Balance/Position/ClosedTrade + ErrNoCredentials
 │       ├── registry.go      — map[name]Exchange + compile-time check (6 бірж)
 │       ├── client.go        — HTTP client, retry при 429, postForm для Kraken
 │       ├── helpers.go       — hmacSHA256/512, hmacSHA256Base64, sha512Hex, normalizeSymbol
@@ -115,7 +119,9 @@ migrations/
 ├── 000001_initial_schema.up.sql    — CREATE TABLE × 7 + 34 початкові активи
 ├── 000001_initial_schema.down.sql  — DROP TABLE у зворотньому порядку
 ├── 000002_orders.up.sql            — orders table (статуси, exchange_order_id)
-└── 000002_orders.down.sql          — DROP TABLE orders
+├── 000002_orders.down.sql          — DROP TABLE orders
+├── 000003_smart_orders.up.sql      — smart_orders table (SL/TP/Trailing, peak_price, callback_rate)
+└── 000003_smart_orders.down.sql    — DROP TABLE smart_orders
 
 docs/
 ├── getting-started.md   — встановлення, конфігурація, перший запуск
@@ -155,6 +161,11 @@ GET    /api/orders                        — список ордерів (?stat
 GET    /api/orders/:id                    — статус ордеру (живий запит до біржі)
 DELETE /api/orders/:id                    — скасувати ордер
 
+POST   /api/smart-orders                  — створити умовний ордер (SL/TP/Trailing)
+GET    /api/smart-orders                  — список умовних ордерів користувача
+GET    /api/smart-orders/:id              — один умовний ордер
+DELETE /api/smart-orders/:id              — скасувати умовний ордер
+
 GET    /ws                                — WebSocket (потребує auth повідомлення)
 ```
 
@@ -185,27 +196,19 @@ GET    /ws                                — WebSocket (потребує auth �
 
 ## З чого почати наступну сесію
 
-**Фази 0–3 завершені.** Переходимо до **Фази 4 (Smart Orders і боти)**.
+**Фази 0–4 завершені.** Переходимо до **Фази 4 (залишок — Grid Bot) або Фази 5 (Аналітика)**.
 
-### Обов'язковий перший крок
-```bash
-# Застосувати міграцію 000002 (orders table)
-go run ./cmd/migrate/... up
-```
+### Фаза 4 залишок — Grid Bot ← ПОЧАТИ ЗВІДСИ
 
-### Фаза 4 — Smart Orders та боти ← ПОЧАТИ ЗВІДСИ
+1. **Grid Bot** — goroutine per bot, стан в БД
+   Нова таблиця `bots` + `bot_grids` (нова міграція),
+   новий сервіс `internal/services/bot_service.go`.
+   Бот розміщує limit ордери на рівнях сітки, поповнює сітку при виконанні.
 
-1. **Smart Orders** — Stop-Loss, Take-Profit, Trailing Stop
-   Нова таблиця `smart_orders` (нова міграція), новий сервіс `internal/services/smart_order_service.go`.
-   Фоновий горутин перевіряє ціни і тригерить ордери.
-
-2. **Grid Bot** — goroutine per bot, стан в БД
-   Нова таблиця `bots`, новий сервіс `internal/services/bot_service.go`.
-
-3. **Тести** — unit для exchange helpers (parseFloat, hmacSHA256), integration для OrderRepository.
+2. **Тести** — unit для exchange helpers (parseFloat, hmacSHA256), integration для OrderRepository.
 
 ### Фаза 5 — Аналітика
-- portfolio_snapshots таблиця (щоденний snapshot через scheduler)
+- `portfolio_snapshots` таблиця (щоденний snapshot через scheduler)
 - PnL графіки (winrate, середній PnL, найкращі монети)
 - Arbitrage scanner між біржами
 
@@ -215,6 +218,7 @@ go run ./cmd/migrate/... up
 
 | Проблема | Файл | Пріоритет |
 |---|---|---|
+| `getUserCreds` продубльовано в handler і smart_order_service | `handlers/order.go`, `services/smart_order_service.go` | 🟡 MEDIUM |
 | `GetLivePrices(nil)` — витягує всі ціни замість потрібних | `ws/server.go` | 🟡 MEDIUM |
 | Немає жодного тесту | весь проєкт | 🟡 MEDIUM |
 | `gorilla/websocket` в go.mod — не використовується | `go.mod` | 🟢 LOW |
@@ -240,11 +244,16 @@ go run ./cmd/migrate/... up
 - [x] OrderRepository + orders table (migration 000002)
 - [x] OrderHandler: POST/GET/DELETE /api/orders
 - [x] Order lifecycle: save→place→update / on error→mark rejected
-- [ ] Smart Orders: Stop-Loss, Take-Profit, Trailing Stop, TWAP
-- [ ] Grid Bot (goroutine per bot, стан в БД)
+
+### Фаза 4 — Smart Orders та боти (в процесі)
+- [x] SmartOrder model + SmartOrderRepository (migration 000003)
+- [x] SmartOrderService: CheckAndTrigger кожні 5с — SL/TP/Trailing логіка
+- [x] SmartOrderHandler: POST/GET/DELETE /api/smart-orders
+- [x] ErrNoCredentials sentinel error в exchange пакеті
+- [ ] Grid Bot (goroutine per bot, стан в БД, таблиці bots + bot_grids)
 - [ ] DCA Bot
 
-### Фаза 4 — Аналітика
+### Фаза 5 — Аналітика
 - [ ] PnL графіки по часу (потрібна таблиця `portfolio_snapshots`)
 - [ ] Winrate, середній PnL, кращі/гірші монети
 - [ ] Portfolio rebalancing

@@ -1,5 +1,10 @@
 package exchange
 
+import "errors"
+
+// ErrNoCredentials повертається коли не знайдено активних credentials для біржі.
+var ErrNoCredentials = errors.New("no active credentials found for exchange")
+
 // Credentials містить дані доступу до біржі
 type Credentials struct {
 	APIKey     string
