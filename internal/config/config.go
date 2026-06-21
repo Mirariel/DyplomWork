@@ -25,6 +25,12 @@ type Config struct {
 	// RedisURL — необов'язковий. Якщо порожній — використовується in-memory cache.
 	// Формат: "localhost:6379" або "redis://:password@host:6379/0"
 	RedisURL string
+
+	// Telegram — необов'язкові. Якщо порожні — сповіщення вимкнені.
+	// TelegramToken: токен бота від @BotFather
+	// TelegramChatID: chat_id користувача або групи
+	TelegramToken  string
+	TelegramChatID string
 }
 
 func Load() *Config {
@@ -46,6 +52,9 @@ func Load() *Config {
 		EncryptionKey: getEnv("APP_KEY", ""),
 		AnthropicKey:  getEnv("ANTHROPIC_API_KEY", ""),
 		RedisURL:      getEnv("REDIS_URL", ""),
+
+		TelegramToken:  getEnv("TELEGRAM_BOT_TOKEN", ""),
+		TelegramChatID: getEnv("TELEGRAM_CHAT_ID", ""),
 	}
 }
 

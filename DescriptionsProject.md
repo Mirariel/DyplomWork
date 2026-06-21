@@ -33,6 +33,7 @@ Go дає нам goroutines, канали, і compile-time safety без overhea
 ### Фаза 6 — DCA Bot, Arbitrage Scanner, Unit Tests ✅ DONE
 ### Фаза 7 — Frontend (React + Vite Dashboard) ✅ DONE
 ### Фаза 8 — Prometheus Metrics ✅ DONE
+### Фаза 9 — Telegram Push Notifications ✅ DONE
 
 **Сервер зараз:** `http://localhost:8080` (Go + Fiber v2)
 **Frontend:** `http://localhost:5173` (Vite dev), `npm run build` → dist/
@@ -113,6 +114,8 @@ internal/
 │   └── scheduler.go         — фонові задачі з context cancellation
 ├── metrics/
 │   └── metrics.go           — Prometheus counters/histograms/gauges + HTTP middleware
+├── notify/
+│   └── telegram.go          — Telegram Bot API клієнт (no-op якщо токен не заданий)
 ├── validator/
 │   └── validator.go         — Validate() helper поверх go-playground/validator
 ├── services/
@@ -279,14 +282,13 @@ GET    /metrics                           — Prometheus metrics (scrape endpoin
 
 ## З чого почати наступну сесію
 
-**Фази 0–8 завершені.** Проєкт повністю функціональний.
+**Фази 0–9 завершені.** Проєкт повністю функціональний.
 
 ### Можливі наступні кроки
 
-1. **Telegram bot** — push-сповіщення про тригери smart orders і DCA
-2. **Frontend code splitting** — динамічні імпорти (зараз bundle 725 kB, рекомендовано < 500 kB)
-3. **Інтеграційні тести** — тестування репозиторіїв проти реальної БД
-4. **getUserCreds рефактор** — консолідувати в shared helper (tech debt P-014)
+1. **Frontend code splitting** — динамічні імпорти (зараз bundle 725 kB, рекомендовано < 500 kB)
+2. **Інтеграційні тести** — тестування репозиторіїв проти реальної БД
+3. **getUserCreds рефактор** — консолідувати в shared helper (tech debt P-014)
 
 ---
 

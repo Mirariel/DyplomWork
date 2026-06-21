@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/okochadmytro/tradetracker/internal/models"
+	"github.com/okochadmytro/tradetracker/internal/notify"
 	"github.com/okochadmytro/tradetracker/internal/services/exchange"
 )
 
@@ -20,6 +21,7 @@ type DCAService struct {
 	price     *PriceService
 	enc       *EncryptionService
 	exchanges map[string]exchange.Exchange
+	notifier  *notify.Notifier
 	logger    *slog.Logger
 }
 
@@ -28,6 +30,7 @@ func NewDCAService(
 	portfolio *models.PortfolioRepository,
 	price *PriceService,
 	enc *EncryptionService,
+	notifier *notify.Notifier,
 	logger *slog.Logger,
 ) *DCAService {
 	return &DCAService{
@@ -36,6 +39,7 @@ func NewDCAService(
 		price:     price,
 		enc:       enc,
 		exchanges: exchange.Registry(),
+		notifier:  notifier,
 		logger:    logger,
 	}
 }
@@ -160,6 +164,8 @@ func (s *DCAService) executeBuy(bot models.DCABot) {
 		"qty", actualQty, "price", currentPrice,
 		"amount_usd", bot.AmountUSD,
 		"next_buy_at", nextBuyAt.Format(time.RFC3339))
+
+	s.notifier.DCABought(bot.Symbol, bot.Exchange, actualQty, bot.AmountUSD, currentPrice)
 }
 
 // getUserCreds розшифровує credentials для вказаної біржі.

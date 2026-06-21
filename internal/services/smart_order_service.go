@@ -6,6 +6,7 @@ import (
 
 	"github.com/jmoiron/sqlx"
 	"github.com/okochadmytro/tradetracker/internal/models"
+	"github.com/okochadmytro/tradetracker/internal/notify"
 	"github.com/okochadmytro/tradetracker/internal/services/exchange"
 )
 
@@ -18,6 +19,7 @@ type SmartOrderService struct {
 	price       *PriceService
 	enc         *EncryptionService
 	exchanges   map[string]exchange.Exchange
+	notifier    *notify.Notifier
 	logger      *slog.Logger
 }
 
@@ -28,6 +30,7 @@ func NewSmartOrderService(
 	portfolio *models.PortfolioRepository,
 	price *PriceService,
 	enc *EncryptionService,
+	notifier *notify.Notifier,
 	logger *slog.Logger,
 ) *SmartOrderService {
 	return &SmartOrderService{
@@ -37,6 +40,7 @@ func NewSmartOrderService(
 		price:       price,
 		enc:         enc,
 		exchanges:   exchange.Registry(),
+		notifier:    notifier,
 		logger:      logger,
 	}
 }
@@ -201,6 +205,7 @@ func (s *SmartOrderService) executeOrder(o models.SmartOrder) {
 		s.logger.Error("smart_order: place failed", "id", o.ID, "error", err)
 		_ = s.orders.MarkFailed(dbOrder.ID, err.Error())
 		_ = s.smartOrders.MarkFailed(o.ID, err.Error())
+		s.notifier.SmartOrderFailed(o.ID, o.Symbol, o.Exchange, err.Error())
 		return
 	}
 
@@ -210,6 +215,8 @@ func (s *SmartOrderService) executeOrder(o models.SmartOrder) {
 	s.logger.Info("smart_order: executed",
 		"smart_id", o.ID, "order_id", dbOrder.ID,
 		"exchange", o.Exchange, "symbol", o.Symbol, "side", o.Side)
+
+	s.notifier.SmartOrderTriggered(o.Type, o.Symbol, o.Exchange, placed.AvgPrice)
 }
 
 // getUserCreds розшифровує credentials для вказаної біржі.

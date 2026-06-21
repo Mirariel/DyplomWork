@@ -23,6 +23,7 @@ import (
 	"github.com/okochadmytro/tradetracker/internal/metrics"
 	"github.com/okochadmytro/tradetracker/internal/middleware"
 	"github.com/okochadmytro/tradetracker/internal/models"
+	"github.com/okochadmytro/tradetracker/internal/notify"
 	"github.com/okochadmytro/tradetracker/internal/scheduler"
 	"github.com/okochadmytro/tradetracker/internal/services"
 	"github.com/okochadmytro/tradetracker/internal/ws"
@@ -75,13 +76,21 @@ func main() {
 	snapshotRepo := models.NewSnapshotRepository(db)
 	dcaBotRepo := models.NewDCABotRepository(db)
 
+	// Notifier (Telegram) — no-op якщо TELEGRAM_BOT_TOKEN або TELEGRAM_CHAT_ID не задані
+	notifier := notify.New(cfg.TelegramToken, cfg.TelegramChatID, logger)
+	if notifier.Enabled() {
+		logger.Info("telegram notifications: enabled")
+	} else {
+		logger.Info("telegram notifications: disabled (set TELEGRAM_BOT_TOKEN + TELEGRAM_CHAT_ID to enable)")
+	}
+
 	// Services
 	syncService := services.NewSyncService(db, enc, logger)
 	priceService := services.NewPriceService(db, priceStore, logger)
-	smartOrderService := services.NewSmartOrderService(db, smartOrderRepo, orderRepo, portfolioRepo, priceService, enc, logger)
+	smartOrderService := services.NewSmartOrderService(db, smartOrderRepo, orderRepo, portfolioRepo, priceService, enc, notifier, logger)
 	botService := services.NewBotService(botRepo, portfolioRepo, enc, logger)
 	analyticsService := services.NewAnalyticsService(db, snapshotRepo, logger)
-	dcaService := services.NewDCAService(dcaBotRepo, portfolioRepo, priceService, enc, logger)
+	dcaService := services.NewDCAService(dcaBotRepo, portfolioRepo, priceService, enc, notifier, logger)
 
 	// WebSocket
 	hub := ws.NewHub()
