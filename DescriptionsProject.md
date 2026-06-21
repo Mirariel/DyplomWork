@@ -29,11 +29,12 @@ Go дає нам goroutines, канали, і compile-time safety без overhea
 ### Фаза 3 — Торгівля (Binance + OKX + Bybit PlaceOrder/Cancel/Status) ✅ DONE
 ### Фаза 4 — Smart Orders (Stop-Loss, Take-Profit, Trailing Stop) ✅ DONE
 ### Фаза 4 (залишок) — Grid Bot ✅ DONE
+### Фаза 5 — Аналітика (Snapshots, TradeSummary, Coin Performance) ✅ DONE
 
 **Сервер зараз:** `http://localhost:8080` (Go + Fiber v2)
 **WebSocket:** `ws://localhost:8080/ws`
 **БД:** MySQL `tradetracker_go` (WAMP, порт 3306)
-**Міграція:** version 4 (bots + bot_grids tables) — застосовано ✅
+**Міграція:** version 5 (portfolio_snapshots table) — застосовано ✅
 
 ---
 
@@ -75,14 +76,16 @@ internal/
 │   │                          PortfolioRepository
 │   ├── order.go             — Order struct + OrderRepository (Create/GetByID/List/UpdateStatus/MarkFailed)
 │   ├── smart_order.go       — SmartOrder struct + SmartOrderRepository (Create/ListActive/ListByUser/Cancel/MarkTriggered/UpdatePeak)
-│   └── bot.go               — Bot + BotGrid structs + BotRepository (Create/ListRunning/UpdateGrid/AddProfit/CancelAllGrids)
+│   ├── bot.go               — Bot + BotGrid structs + BotRepository (Create/ListRunning/UpdateGrid/AddProfit/CancelAllGrids)
+│   └── snapshot.go          — PortfolioSnapshot struct + SnapshotRepository (Upsert/ListByUser/AllUserIDs)
 ├── handlers/
 │   ├── auth.go              — register/login/logout/me
 │   ├── portfolio.go         — CRUD credentials, comments, price update
 │   ├── sync.go              — full/positions/history/prices sync endpoints
 │   ├── order.go             — PlaceOrder/CancelOrder/GetOrder/ListOrders
 │   ├── smart_order.go       — Create/List/Get/Cancel для умовних ордерів
-│   └── bot.go               — Create/List/Get/Start/Stop/Delete для grid-ботів
+│   ├── bot.go               — Create/List/Get/Start/Stop/Delete для grid-ботів
+│   └── analytics.go         — Summary/Coins/Snapshots/TakeSnapshot
 ├── cache/
 │   ├── cache.go             — PriceStorer interface (swap memory↔Redis без змін в сервісі)
 │   └── memory.go            — MemoryPriceStore (поточна реалізація)
@@ -97,6 +100,7 @@ internal/
 │   ├── price_service.go     — ціни через cache.PriceStorer + UpdateAllAssets()
 │   ├── smart_order_service.go — CheckAndTrigger: перевіряє SL/TP/Trailing кожні 5с, виконує market order
 │   ├── bot_service.go         — Start/Stop/CheckBots: grid bot lifecycle, counter orders кожні 10с
+│   ├── analytics_service.go   — TakeSnapshot/TakeAllSnapshots (scheduler 1h), GetTradeSummary, GetCoinPerformance
 │   └── exchange/
 │       ├── interface.go     — Exchange interface: Balance/Position/ClosedTrade + ErrNoCredentials
 │       ├── registry.go      — map[name]Exchange + compile-time check (6 бірж)
@@ -127,7 +131,9 @@ migrations/
 ├── 000003_smart_orders.up.sql      — smart_orders table (SL/TP/Trailing, peak_price, callback_rate)
 ├── 000003_smart_orders.down.sql    — DROP TABLE smart_orders
 ├── 000004_bots.up.sql              — bots + bot_grids tables (grid bot lifecycle)
-└── 000004_bots.down.sql            — DROP TABLE bot_grids, bots
+├── 000004_bots.down.sql            — DROP TABLE bot_grids, bots
+├── 000005_analytics.up.sql         — portfolio_snapshots (daily portfolio value, spot+futures)
+└── 000005_analytics.down.sql       — DROP TABLE portfolio_snapshots
 
 docs/
 ├── getting-started.md   — встановлення, конфігурація, перший запуск
@@ -179,6 +185,11 @@ POST   /api/bots/:id/start                — запустити бота (ви�
 POST   /api/bots/:id/stop                 — зупинити бота (скасовує ордери)
 DELETE /api/bots/:id                      — видалити зупиненого бота
 
+GET    /api/analytics/summary             — winrate, avg PnL, profit factor, best/worst trade
+GET    /api/analytics/coins               — статистика по кожній монеті (sorted by total_pnl)
+GET    /api/analytics/snapshots?days=30   — PnL по часу (для графіку)
+POST   /api/analytics/snapshot            — зробити snapshot зараз (без scheduler)
+
 GET    /ws                                — WebSocket (потребує auth повідомлення)
 ```
 
@@ -211,16 +222,11 @@ GET    /ws                                — WebSocket (потребує auth �
 
 **Фази 0–4 завершені.** Переходимо до **Фази 4 (залишок — Grid Bot) або Фази 5 (Аналітика)**.
 
-### Фаза 5 — Аналітика ← ПОЧАТИ ЗВІДСИ
+### Фаза 6 — Тести та масштаб ← ПОЧАТИ ЗВІДСИ
 
-1. **portfolio_snapshots** — щоденний snapshot через scheduler, основа для PnL-графіків
-2. **PnL аналітика** — winrate, середній PnL, найкращі/гірші монети
-3. **Тести** — unit для exchange helpers (parseFloat, hmacSHA256), integration для OrderRepository
-
-### Фаза 5 — Аналітика
-- `portfolio_snapshots` таблиця (щоденний snapshot через scheduler)
-- PnL графіки (winrate, середній PnL, найкращі монети)
-- Arbitrage scanner між біржами
+1. **Тести** — unit для exchange helpers (parseFloat, hmacSHA256), integration для репозиторіїв
+2. **Arbitrage scanner** — порівняння цін між біржами в реальному часі
+3. **DCA Bot** — Dollar Cost Averaging стратегія
 
 ---
 
@@ -265,6 +271,13 @@ GET    /ws                                — WebSocket (потребує auth �
 - [x] BotHandler: POST/GET/Start/Stop/Delete /api/bots
 - [x] Bugfix аудит: GetLivePrices(nil), roundFloat, stmt.Exec errors, nil pointer GetOrder
 - [ ] DCA Bot
+
+### Фаза 5 — Аналітика ✅ DONE
+- [x] portfolio_snapshots таблиця (migration 000005), UPSERT щогодини через scheduler
+- [x] AnalyticsService: TakeSnapshot (spot_value + futures_pnl), GetTradeSummary, GetCoinPerformance
+- [x] AnalyticsHandler: GET summary/coins/snapshots + POST snapshot
+- [x] TradeSummary: winrate, avg_pnl, profit_factor, avg_win/loss, best/worst trade
+- [x] CoinPerformance: per-symbol/exchange breakdown, sorted by total_pnl
 
 ### Фаза 5 — Аналітика
 - [ ] PnL графіки по часу (потрібна таблиця `portfolio_snapshots`)

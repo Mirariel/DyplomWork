@@ -69,12 +69,14 @@ func main() {
 	orderRepo := models.NewOrderRepository(db)
 	smartOrderRepo := models.NewSmartOrderRepository(db)
 	botRepo := models.NewBotRepository(db)
+	snapshotRepo := models.NewSnapshotRepository(db)
 
 	// Services
 	syncService := services.NewSyncService(db, enc, logger)
 	priceService := services.NewPriceService(db, priceStore, logger)
 	smartOrderService := services.NewSmartOrderService(db, smartOrderRepo, orderRepo, portfolioRepo, priceService, enc, logger)
 	botService := services.NewBotService(botRepo, portfolioRepo, enc, logger)
+	analyticsService := services.NewAnalyticsService(db, snapshotRepo, logger)
 
 	// WebSocket
 	hub := ws.NewHub()
@@ -114,6 +116,11 @@ func main() {
 			Interval: 10 * time.Second,
 			Fn:       botService.CheckBots,
 		},
+		scheduler.Job{
+			Name:     "portfolio-snapshots",
+			Interval: 1 * time.Hour,
+			Fn:       analyticsService.TakeAllSnapshots,
+		},
 	)
 	sched.Start(ctx)
 
@@ -124,6 +131,7 @@ func main() {
 	orderHandler := handlers.NewOrderHandler(orderRepo, portfolioRepo, enc, logger)
 	smartOrderHandler := handlers.NewSmartOrderHandler(smartOrderRepo)
 	botHandler := handlers.NewBotHandler(botRepo, botService, priceService)
+	analyticsHandler := handlers.NewAnalyticsHandler(analyticsService, snapshotRepo)
 
 	// App
 	app := fiber.New(fiber.Config{
@@ -208,6 +216,13 @@ func main() {
 	api.Post("/bots/:id/start", botHandler.Start)
 	api.Post("/bots/:id/stop", botHandler.Stop)
 	api.Delete("/bots/:id", botHandler.Delete)
+
+	// Analytics
+	analytics := api.Group("/analytics")
+	analytics.Get("/summary", analyticsHandler.Summary)
+	analytics.Get("/coins", analyticsHandler.Coins)
+	analytics.Get("/snapshots", analyticsHandler.Snapshots)
+	analytics.Post("/snapshot", analyticsHandler.TakeSnapshot)
 
 	// WebSocket
 	app.Use("/ws", func(c *fiber.Ctx) error {
