@@ -4,7 +4,6 @@ import {
   useState,
   useEffect,
   useCallback,
-  useRef,
   type ReactNode,
 } from 'react'
 import { login as apiLogin, logout as apiLogout, me } from '../api'
@@ -32,36 +31,32 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   )
   const [loading, setLoading] = useState(true)
 
-  // Запобігає повторному виклику me() коли токен щойно встановлено через login()
-  const skipNextMeCall = useRef(false)
-
-  // On mount (or token change from logout): verify stored token via /auth/me
+  // On mount or token change: verify the token via /auth/me.
+  // The cancellation flag handles React StrictMode double-invoke in dev
+  // (the first effect run is cancelled before the second one fires).
   useEffect(() => {
     if (!token) {
       setLoading(false)
       return
     }
-    if (skipNextMeCall.current) {
-      skipNextMeCall.current = false
-      setLoading(false)
-      return
-    }
+    let cancelled = false
     me()
-      .then((u) => setUser(u))
+      .then((u) => { if (!cancelled) setUser(u) })
       .catch(() => {
+        if (cancelled) return
         localStorage.removeItem('tt_token')
         setToken(null)
         setUser(null)
       })
-      .finally(() => setLoading(false))
+      .finally(() => { if (!cancelled) setLoading(false) })
+    return () => { cancelled = true }
   }, [token])
 
   const login = useCallback(async (loginId: string, password: string) => {
     const data = await apiLogin(loginId, password)
     localStorage.setItem('tt_token', data.token)
-    skipNextMeCall.current = true
-    setToken(data.token)
     setUser(data.user)
+    setToken(data.token)
   }, [])
 
   const logout = useCallback(async () => {
