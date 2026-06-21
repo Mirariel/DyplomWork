@@ -2,28 +2,63 @@
 
 ## Вимоги
 
+**Локальний запуск:**
 - Go 1.21+
-- MySQL / MariaDB (WAMP або окремо)
-- Git
+- MySQL 8.0 (WAMP або окремо)
+- Node.js 20+ (для frontend dev-сервера)
+
+**Docker-запуск (рекомендовано):**
+- Docker Desktop 4.x
 
 ---
 
-## Встановлення
+## Варіант 1 — Docker (все одною командою)
 
 ```bash
 git clone <repo>
 cd tradetracker-go
+cp .env.example .env   # заповнити JWT_SECRET і APP_KEY
 
-# Встановити залежності
-go mod download
+docker compose up --build -d
+```
+
+Що підіймається автоматично:
+| Сервіс | URL |
+|---|---|
+| Frontend (React/nginx) | http://localhost |
+| Backend API (Go/Fiber) | http://localhost:8080 |
+| Prometheus metrics | http://localhost:8080/metrics |
+| MySQL | localhost:3306 |
+| Redis | localhost:6379 |
+
+Міграції застосовуються автоматично (one-shot `migrate` контейнер).
+
+```bash
+# Корисні команди
+make docker-logs    # tail логів всіх сервісів
+make docker-down    # зупинити
+make docker-reset   # зупинити + видалити volumes (скидає БД)
 ```
 
 ---
 
-## Конфігурація
+## Варіант 2 — Локальний запуск
 
-Скопіюйте `.env.example` у `.env` і заповніть:
+### 1. Клонування і залежності
 
+```bash
+git clone <repo>
+cd tradetracker-go
+go mod download
+```
+
+### 2. Конфігурація
+
+```bash
+cp .env.example .env
+```
+
+Заповнити `.env`:
 ```env
 APP_PORT=8080
 APP_DEBUG=true
@@ -34,39 +69,32 @@ DB_HOST=127.0.0.1
 DB_PORT=3306
 DB_USER=root
 DB_PASSWORD=
-DB_NAME=tradetracker_go
+DB_NAME=tradetracker
 
-# AES-256-GCM ключ для шифрування API ключів бірж (32 hex символи = 16 bytes)
-APP_KEY=b84260907e594d6c97a5a8f7d98305c4
+# AES-256-GCM ключ — рівно 32 символи!
+APP_KEY=your-32-character-encryption-key!
 
-# Опціонально: Redis для кешу цін (залишити порожнім для in-memory)
+# Redis (опціонально — без нього in-memory cache)
 REDIS_URL=
 
-# Опціонально: Claude API для AI-підказок
-ANTHROPIC_API_KEY=
+# Telegram сповіщення (опціонально)
+TELEGRAM_BOT_TOKEN=
+TELEGRAM_CHAT_ID=
 ```
 
----
+### 3. База даних
 
-## Підготовка бази даних
+```sql
+-- В MySQL:
+CREATE DATABASE tradetracker CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+```
 
-1. Запустіть MySQL (WAMP → зелений значок)
-2. Створіть БД:
-   ```sql
-   CREATE DATABASE tradetracker_go CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
-   ```
-3. Запустіть міграції:
-   ```bash
-   go run ./cmd/migrate/... up
-   ```
-   Або використайте Makefile (якщо є `make`):
-   ```bash
-   make migrate-up
-   ```
+```bash
+make migrate-up
+# або: go run ./cmd/migrate/... -cmd up
+```
 
----
-
-## Запуск сервера
+### 4. Запуск backend
 
 ```bash
 go run ./cmd/server/...
@@ -74,9 +102,9 @@ go run ./cmd/server/...
 
 Очікуваний вивід:
 ```
-time=2025-01-15T10:00:00 level=INFO msg="Database connected"
-time=2025-01-15T10:00:00 level=INFO msg="price cache: in-memory"
-time=2025-01-15T10:00:00 level=INFO msg="server starting" port=8080 ws=ws://localhost:8080/ws
+time=2026-06-21T10:00:00 level=INFO msg="Database connected"
+time=2026-06-21T10:00:00 level=INFO msg="price cache: in-memory"
+time=2026-06-21T10:00:00 level=INFO msg="server starting" port=8080
 ```
 
 Перевірка:
@@ -85,9 +113,18 @@ curl http://localhost:8080/health
 # {"status":"ok","version":"0.1.0"}
 ```
 
+### 5. Frontend (dev-сервер)
+
+```bash
+cd frontend
+npm install
+npm run dev
+# → http://localhost:5173
+```
+
 ---
 
-## Перший запит
+## Перший запит (API)
 
 ### 1. Зареєструватись
 ```bash
@@ -120,29 +157,32 @@ curl http://localhost:8080/api/portfolio/ \
 
 ---
 
-## Збірка бінарника
+## Тести
 
 ```bash
-go build -o bin/server ./cmd/server/...
-./bin/server
+# Unit тести (без MySQL)
+go test ./internal/services/exchange/...
+go test ./internal/ws/...
+
+# Інтеграційні тести репозиторіїв (потрібна MySQL tradetracker_test)
+go test ./internal/models/...
+
+# Всі тести
+go test ./...
 ```
+
+Інтеграційні тести автоматично створюють БД `tradetracker_test` і застосовують міграції.
+Для нестандартного DSN: `TEST_DB_DSN=user:pass@tcp(host:port)/tradetracker_test?parseTime=true`
 
 ---
 
 ## Міграції
 
 ```bash
-# Застосувати всі нові міграції
-go run ./cmd/migrate/... up
-
-# Відкотити останню
-go run ./cmd/migrate/... down
-
-# Поточна версія
-go run ./cmd/migrate/... version
-
-# Примусово встановити версію (якщо dirty=true)
-go run ./cmd/migrate/... force 1
+make migrate-up        # застосувати всі нові
+make migrate-down      # відкотити останню
+make migrate-version   # поточна версія (має бути 6)
+make migrate-force     # примусово встановити версію (якщо dirty=true)
 ```
 
 ---
@@ -151,19 +191,19 @@ go run ./cmd/migrate/... force 1
 
 **Dev режим** (`APP_DEBUG=true`) — human-readable:
 ```
-time=2025-01-15T10:00:00 level=INFO msg="order: placed" user_id=1 exchange=binance symbol=BTC order_id=3847291
+time=2026-06-21T10:00:00 level=INFO msg="order: placed" user_id=1 exchange=binance symbol=BTC
 ```
 
 **Prod режим** (`APP_DEBUG=false`) — JSON:
 ```json
-{"time":"2025-01-15T10:00:00Z","level":"INFO","msg":"order: placed","user_id":1,"exchange":"binance","symbol":"BTC","order_id":"3847291"}
+{"time":"2026-06-21T10:00:00Z","level":"INFO","msg":"order: placed","user_id":1,"exchange":"binance"}
 ```
 
 ---
 
-## Зупинка сервера
+## Зупинка
 
-`Ctrl+C` — graceful shutdown: сервер закінчить поточні запити (до 5 секунд) і закриє підключення до БД.
+`Ctrl+C` — graceful shutdown: закінчує поточні запити (до 5 секунд), закриває БД.
 
 ---
 
@@ -174,6 +214,6 @@ time=2025-01-15T10:00:00 level=INFO msg="order: placed" user_id=1 exchange=binan
 | `docs/architecture.md` | Архітектура, паттерни, структура коду |
 | `docs/api-reference.md` | Всі HTTP та WebSocket ендпоінти |
 | `docs/exchange-adapters.md` | Деталі інтеграції кожної біржі |
-| `docs/trading-guide.md` | Розміщення ордерів, управління, помилки |
-| `CLAUDE.md` | Живий стан проєкту для AI-асистента |
+| `docs/trading-guide.md` | Ордери, боти, smart orders |
+| `DescriptionsProject.md` | Живий стан проєкту (фази, roadmap) |
 | `PROBLEMS.md` | Відомі проблеми і рішення |
