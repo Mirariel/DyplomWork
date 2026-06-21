@@ -63,7 +63,7 @@ func (r *DCABotRepository) GetByID(id, userID int64) (*DCABot, error) {
 
 // ListByUser повертає всі DCA боти користувача.
 func (r *DCABotRepository) ListByUser(userID int64) ([]DCABot, error) {
-	var bots []DCABot
+	bots := make([]DCABot, 0)
 	err := r.db.Select(&bots,
 		"SELECT * FROM dca_bots WHERE user_id = ? ORDER BY created_at DESC", userID)
 	return bots, err

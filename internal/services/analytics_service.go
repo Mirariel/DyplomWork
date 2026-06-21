@@ -178,7 +178,7 @@ type CoinPerformance struct {
 
 // GetCoinPerformance повертає статистику по кожній монеті/біржі.
 func (s *AnalyticsService) GetCoinPerformance(userID int64) ([]CoinPerformance, error) {
-	var rows []CoinPerformance
+	rows := make([]CoinPerformance, 0)
 	err := s.db.Select(&rows, `
 		SELECT
 		    symbol,
@@ -268,7 +268,7 @@ func (s *AnalyticsService) GetArbitrage(minSpreadPct float64) []ArbitrageOpportu
 	}
 
 	// Шукаємо арбітражні можливості
-	var opps []ArbitrageOpportunity
+	opps := make([]ArbitrageOpportunity, 0)
 	for symbol, prices := range normalized {
 		if len(prices) < 2 {
 			continue

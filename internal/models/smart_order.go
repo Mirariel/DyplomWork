@@ -66,7 +66,7 @@ func (r *SmartOrderRepository) ListActive() ([]SmartOrder, error) {
 
 // ListByUser повертає умовні ордери конкретного користувача.
 func (r *SmartOrderRepository) ListByUser(userID int64) ([]SmartOrder, error) {
-	var orders []SmartOrder
+	orders := make([]SmartOrder, 0)
 	err := r.db.Select(&orders,
 		"SELECT * FROM smart_orders WHERE user_id = ? ORDER BY created_at DESC LIMIT 100",
 		userID)

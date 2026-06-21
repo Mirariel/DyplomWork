@@ -101,7 +101,7 @@ func NewPortfolioRepository(db *sqlx.DB) *PortfolioRepository {
 }
 
 func (r *PortfolioRepository) GetUserAssets(userID int64) ([]UserPortfolio, error) {
-	var items []UserPortfolio
+	items := make([]UserPortfolio, 0)
 	err := r.db.Select(&items, `
 		SELECT
 			up.id, up.user_id, up.asset_id, up.exchange,
@@ -116,7 +116,7 @@ func (r *PortfolioRepository) GetUserAssets(userID int64) ([]UserPortfolio, erro
 }
 
 func (r *PortfolioRepository) GetOpenPositions(userID int64) ([]OpenPosition, error) {
-	var items []OpenPosition
+	items := make([]OpenPosition, 0)
 	err := r.db.Select(&items,
 		`SELECT * FROM open_positions WHERE user_id = ? ORDER BY updated_at DESC`,
 		userID)
@@ -124,7 +124,7 @@ func (r *PortfolioRepository) GetOpenPositions(userID int64) ([]OpenPosition, er
 }
 
 func (r *PortfolioRepository) GetHistory(userID int64, limit, offset int) ([]PositionHistory, error) {
-	var items []PositionHistory
+	items := make([]PositionHistory, 0)
 	err := r.db.Select(&items,
 		`SELECT * FROM position_history WHERE user_id = ? ORDER BY closed_at DESC LIMIT ? OFFSET ?`,
 		userID, limit, offset)
@@ -132,7 +132,7 @@ func (r *PortfolioRepository) GetHistory(userID int64, limit, offset int) ([]Pos
 }
 
 func (r *PortfolioRepository) GetCredentials(userID int64) ([]ExternalApiCredential, error) {
-	var items []ExternalApiCredential
+	items := make([]ExternalApiCredential, 0)
 	err := r.db.Select(&items,
 		`SELECT * FROM external_api_credentials WHERE user_id = ? AND is_active = 1`,
 		userID)

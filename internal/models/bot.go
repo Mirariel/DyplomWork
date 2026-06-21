@@ -74,7 +74,7 @@ func (r *BotRepository) GetByID(id, userID int64) (*Bot, error) {
 
 // ListByUser повертає всі боти користувача.
 func (r *BotRepository) ListByUser(userID int64) ([]Bot, error) {
-	var bots []Bot
+	bots := make([]Bot, 0)
 	err := r.db.Select(&bots,
 		"SELECT * FROM bots WHERE user_id = ? ORDER BY created_at DESC", userID)
 	return bots, err
@@ -127,7 +127,7 @@ func (r *BotRepository) CreateGrids(grids []BotGrid) error {
 
 // ListOpenGrids повертає рівні сітки зі статусом 'open'.
 func (r *BotRepository) ListOpenGrids(botID int64) ([]BotGrid, error) {
-	var grids []BotGrid
+	grids := make([]BotGrid, 0)
 	err := r.db.Select(&grids,
 		"SELECT * FROM bot_grids WHERE bot_id = ? AND status = 'open' ORDER BY level",
 		botID)
@@ -136,7 +136,7 @@ func (r *BotRepository) ListOpenGrids(botID int64) ([]BotGrid, error) {
 
 // ListAllGrids повертає всі рівні сітки бота.
 func (r *BotRepository) ListAllGrids(botID int64) ([]BotGrid, error) {
-	var grids []BotGrid
+	grids := make([]BotGrid, 0)
 	err := r.db.Select(&grids,
 		"SELECT * FROM bot_grids WHERE bot_id = ? ORDER BY level",
 		botID)

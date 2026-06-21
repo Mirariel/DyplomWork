@@ -65,7 +65,7 @@ func (r *OrderRepository) GetByID(id, userID int64) (*Order, error) {
 
 // ListByUser повертає ордери користувача. status="" — всі, інакше фільтрує.
 func (r *OrderRepository) ListByUser(userID int64, status string) ([]Order, error) {
-	var orders []Order
+	orders := make([]Order, 0)
 	var err error
 	if status != "" {
 		err = r.db.Select(&orders,

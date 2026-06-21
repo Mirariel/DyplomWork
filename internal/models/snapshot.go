@@ -45,7 +45,7 @@ func (r *SnapshotRepository) Upsert(s *PortfolioSnapshot) error {
 
 // ListByUser повертає snapshots користувача за останні N днів.
 func (r *SnapshotRepository) ListByUser(userID int64, days int) ([]PortfolioSnapshot, error) {
-	var snaps []PortfolioSnapshot
+	snaps := make([]PortfolioSnapshot, 0)
 	err := r.db.Select(&snaps, `
 		SELECT * FROM portfolio_snapshots
 		WHERE user_id = ? AND snapshot_date >= DATE_SUB(CURDATE(), INTERVAL ? DAY)
