@@ -871,3 +871,120 @@ proxy_pass http://api-gateway:8080;
   бо баги з `null`-відповідями проявляються лише при відсутності даних у БД.
 
 **Зачеплені файли:** `frontend/nginx.conf`, `internal/models/*.go`, `internal/services/analytics_service.go`
+
+---
+
+## P-031 — Blank screen після додавання API ключа: `json:"-"` + React StrictMode подвійний виклик
+
+**Коли:** Тестування додавання API credentials через UI після Фази 15.
+
+**Проблема (два незалежних баги):**
+
+### 1. `maskKey(c.api_key)` — TypeError на полі з тегом `json:"-"`
+
+Portfolio сторінка відображала API ключі через функцію `maskKey`:
+
+```tsx
+// Portfolio.tsx — стара логіка
+const maskKey = (key: string) =>
+  key.length > 8 ? key.slice(0, 4) + '••••' + key.slice(-4) : '••••••••'
+
+// Використання:
+<p>{maskKey(c.api_key)}</p>      // c.api_key = undefined!
+```
+
+Поле `api_key_encrypted` в Go моделі має тег `json:"-"`:
+```go
+ApiKeyEncrypted string `db:"api_key_encrypted" json:"-"`
+```
+Тобто воно **ніколи не надсилається** в HTTP-відповіді. Але `Credential` інтерфейс в `api.ts`
+не містив поля `api_key` взагалі — TypeScript це не перевіряв (обʼєкт прийшов як `any` з axios).
+При виклику `maskKey(undefined)` → `undefined.length` → `TypeError` → crash рендеру → білий екран.
+
+**Рішення:**
+Додати `label` (VARCHAR 100) і `api_key_hint` (VARCHAR 20) колонки через міграцію 000007.
+Сервер рахує hint на стороні бекенду (перші 4 + `••••` + останні 4 символи ключа) і зберігає в БД.
+Frontend отримує готовий `api_key_hint` рядок — жодних обчислень на клієнті:
+
+```go
+// handlers/portfolio.go
+hint := body.APIKey
+if len(hint) > 8 {
+    hint = hint[:4] + "••••" + hint[len(hint)-4:]
+}
+cred := &models.ExternalApiCredential{
+    Label:      body.Label,
+    ApiKeyHint: hint,
+    ...
+}
+```
+
+```tsx
+// Portfolio.tsx — нова логіка
+<p className="font-mono text-xs">{c.api_key_hint || '••••••••'}</p>
+```
+
+### 2. React StrictMode + `skipNextMeCall` ref — `me()` викликається двічі
+
+`AuthContext.tsx` використовував `useRef` флаг `skipNextMeCall` щоб уникнути повторного виклику
+`me()` після логіну (бо `setToken` в `login()` тригерить `useEffect([token])`):
+
+```tsx
+// AuthContext.tsx — стара логіка
+const skipNextMeCall = useRef(false)
+useEffect(() => {
+  if (skipNextMeCall.current) {
+    skipNextMeCall.current = false
+    return
+  }
+  me().then(setUser).catch(() => { ... })
+}, [token])
+
+const login = async (...) => {
+  ...
+  skipNextMeCall.current = true  // 1-й запуск скіпається...
+  setToken(data.token)           // ...але StrictMode запускає effect ДВА рази
+}
+```
+
+React 18 StrictMode у dev-режимі навмисно монтує компоненти двічі (mount → unmount → mount).
+При першому mount effect спрацьовує → `skipNextMeCall.current = false` (скидає флаг).
+При другому mount effect знов спрацьовує → флаг вже `false` → `me()` викликається → 401 → logout.
+
+**Рішення:**
+Прибрати `skipNextMeCall` взагалі. Використати стандартний cleanup pattern з `cancelled` флагом:
+
+```tsx
+useEffect(() => {
+  if (!token) { setLoading(false); return }
+  let cancelled = false
+  me()
+    .then((u) => { if (!cancelled) setUser(u) })
+    .catch(() => {
+      if (cancelled) return
+      localStorage.removeItem('tt_token')
+      setToken(null); setUser(null)
+    })
+    .finally(() => { if (!cancelled) setLoading(false) })
+  return () => { cancelled = true }
+}, [token])
+```
+
+При StrictMode double-invoke: перший effect отримує `cancelled = true` через cleanup → ігнорує результат.
+Другий effect виконується нормально. Флаг не потрібен.
+
+**Урок:**
+- `json:"-"` в Go struct означає "ніколи не в JSON". Якщо фронтенд очікує поле — воно **ніколи** не прийде.
+  Масковані дані (key hints) рахувати на бекенді, не на клієнті.
+- React StrictMode умисно ламає `useRef`-флаги між ефектами — вони не persist між double-invoke.
+  Для async cleanup у `useEffect` — завжди `let cancelled = false` + `return () => { cancelled = true }`.
+- Після `json:"-"` таг: TypeScript `interface` повинен відображати що реально приходить з API,
+  не що є в Go struct.
+
+**Зачеплені файли:**
+`migrations/000007_credentials_label.up.sql` (новий),
+`internal/models/portfolio.go` (ExternalApiCredential + UpsertCredential),
+`internal/handlers/portfolio.go` (hint + label),
+`frontend/src/api.ts` (Credential interface),
+`frontend/src/pages/Portfolio.tsx` (maskKey видалено → api_key_hint),
+`frontend/src/context/AuthContext.tsx` (skipNextMeCall → cancelled flag)
