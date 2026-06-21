@@ -8,16 +8,19 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/gofiber/adaptor/v2"
 	"github.com/gofiber/fiber/v2"
 	"github.com/gofiber/fiber/v2/middleware/cors"
 	"github.com/gofiber/fiber/v2/middleware/limiter"
 	"github.com/gofiber/fiber/v2/middleware/recover"
 	fiberws "github.com/gofiber/websocket/v2"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 	goredis "github.com/redis/go-redis/v9"
 	"github.com/okochadmytro/tradetracker/internal/cache"
 	"github.com/okochadmytro/tradetracker/internal/config"
 	"github.com/okochadmytro/tradetracker/internal/database"
 	"github.com/okochadmytro/tradetracker/internal/handlers"
+	"github.com/okochadmytro/tradetracker/internal/metrics"
 	"github.com/okochadmytro/tradetracker/internal/middleware"
 	"github.com/okochadmytro/tradetracker/internal/models"
 	"github.com/okochadmytro/tradetracker/internal/scheduler"
@@ -128,6 +131,23 @@ func main() {
 			Interval: 5 * time.Minute,
 			Fn:       dcaService.CheckAndBuy,
 		},
+		// Оновлення Prometheus gauge'ів кожні 30 секунд
+		scheduler.Job{
+			Name:     "metrics-update",
+			Interval: 30 * time.Second,
+			Fn: func(_ context.Context) {
+				metrics.WSClientsConnected.Set(float64(hub.ClientCount()))
+
+				var runningBots, runningDCA, activeSO int64
+				_ = db.Get(&runningBots, `SELECT COUNT(*) FROM bots WHERE status = 'running'`)
+				_ = db.Get(&runningDCA, `SELECT COUNT(*) FROM dca_bots WHERE status = 'running'`)
+				_ = db.Get(&activeSO, `SELECT COUNT(*) FROM smart_orders WHERE status = 'active'`)
+
+				metrics.ActiveGridBots.Set(float64(runningBots))
+				metrics.ActiveDCABots.Set(float64(runningDCA))
+				metrics.ActiveSmartOrders.Set(float64(activeSO))
+			},
+		},
 	)
 	sched.Start(ctx)
 
@@ -153,6 +173,7 @@ func main() {
 	})
 
 	app.Use(recover.New())
+	app.Use(metrics.Middleware())
 	app.Use(cors.New(cors.Config{
 		AllowOrigins:     "http://localhost:3000,http://localhost:5173",
 		AllowHeaders:     "Origin, Content-Type, Accept, Authorization",
@@ -254,6 +275,9 @@ func main() {
 	app.Get("/health", func(c *fiber.Ctx) error {
 		return c.JSON(fiber.Map{"status": "ok", "version": "0.1.0"})
 	})
+
+	// Prometheus metrics — виключаємо із збору власних метрик через adaptor
+	app.Get("/metrics", adaptor.HTTPHandler(promhttp.Handler()))
 
 	// --- Graceful shutdown ---
 	quit := make(chan os.Signal, 1)

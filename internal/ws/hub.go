@@ -46,6 +46,13 @@ func (h *Hub) authenticatedUsers() map[int64][]*Client {
 	return grouped
 }
 
+// ClientCount повертає кількість підключених WS клієнтів (для метрик).
+func (h *Hub) ClientCount() int {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	return len(h.clients)
+}
+
 // sendToUser надсилає повідомлення всім з'єднанням конкретного користувача.
 func (h *Hub) sendToUser(userID int64, data []byte) {
 	h.mu.RLock()

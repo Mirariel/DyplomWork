@@ -11,6 +11,8 @@ import (
 	"context"
 	"log/slog"
 	"time"
+
+	"github.com/okochadmytro/tradetracker/internal/metrics"
 )
 
 // Job описує одну фонову задачу.
@@ -61,7 +63,9 @@ func (s *Scheduler) run(ctx context.Context, job Job) {
 			return
 		case <-ticker.C:
 			s.logger.Debug("scheduler: running job", "job", job.Name)
+			t := time.Now()
 			job.Fn(ctx)
+			metrics.SchedulerJobDuration.WithLabelValues(job.Name).Observe(time.Since(t).Seconds())
 		}
 	}
 }

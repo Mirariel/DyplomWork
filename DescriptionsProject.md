@@ -32,6 +32,7 @@ Go дає нам goroutines, канали, і compile-time safety без overhea
 ### Фаза 5 — Аналітика (Snapshots, TradeSummary, Coin Performance) ✅ DONE
 ### Фаза 6 — DCA Bot, Arbitrage Scanner, Unit Tests ✅ DONE
 ### Фаза 7 — Frontend (React + Vite Dashboard) ✅ DONE
+### Фаза 8 — Prometheus Metrics ✅ DONE
 
 **Сервер зараз:** `http://localhost:8080` (Go + Fiber v2)
 **Frontend:** `http://localhost:5173` (Vite dev), `npm run build` → dist/
@@ -110,6 +111,8 @@ internal/
 │   └── memory.go            — MemoryPriceStore (поточна реалізація)
 ├── scheduler/
 │   └── scheduler.go         — фонові задачі з context cancellation
+├── metrics/
+│   └── metrics.go           — Prometheus counters/histograms/gauges + HTTP middleware
 ├── validator/
 │   └── validator.go         — Validate() helper поверх go-playground/validator
 ├── services/
@@ -246,6 +249,7 @@ POST   /api/dca/:id/stop                  — зупинити
 DELETE /api/dca/:id                       — видалити зупиненого бота
 
 GET    /ws                                — WebSocket (потребує auth повідомлення)
+GET    /metrics                           — Prometheus metrics (scrape endpoint)
 ```
 
 ### WebSocket протокол
@@ -275,15 +279,14 @@ GET    /ws                                — WebSocket (потребує auth �
 
 ## З чого почати наступну сесію
 
-**Фази 0–7 завершені.** Проєкт повністю функціональний.
+**Фази 0–8 завершені.** Проєкт повністю функціональний.
 
 ### Можливі наступні кроки
 
-1. **Prometheus метрики** — /metrics ендпоінт (запити, latency, активні боти)
-2. **Telegram bot** — push-сповіщення про тригери smart orders і DCA
-3. **Frontend code splitting** — динамічні імпорти (зараз bundle 725 kB, рекомендовано < 500 kB)
-4. **Інтеграційні тести** — тестування репозиторіїв проти реальної БД
-5. **getUserCreds рефактор** — консолідувати в shared helper (tech debt P-014)
+1. **Telegram bot** — push-сповіщення про тригери smart orders і DCA
+2. **Frontend code splitting** — динамічні імпорти (зараз bundle 725 kB, рекомендовано < 500 kB)
+3. **Інтеграційні тести** — тестування репозиторіїв проти реальної БД
+4. **getUserCreds рефактор** — консолідувати в shared helper (tech debt P-014)
 
 ---
 
