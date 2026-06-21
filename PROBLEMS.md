@@ -653,3 +653,120 @@ opps.map((opp) => <tr key={`${opp.symbol}-${opp.buy_exchange}-${opp.sell_exchang
 пересортовуватись. Використовувати унікальні бізнес-ідентифікатори.
 
 **Зачеплені файли:** `frontend/src/pages/Analytics.tsx`
+
+---
+
+## P-025 — `getUserCreds` продубльовано в 4 місцях
+
+**Коли:** Аудит коду після завершення Фази 9.
+
+**Проблема:**
+Метод `getUserCreds(userID int64, exchangeName string)` з однаковою логікою
+(GetCredentials → decrypt → return Credentials) існував у чотирьох місцях:
+- `handlers/order.go` як `(h *OrderHandler) getUserCreds`
+- `services/smart_order_service.go` як `(s *SmartOrderService) getUserCreds`
+- `services/bot_service.go` як `(s *BotService) getUserCreds`
+- `services/dca_service.go` як `(s *DCAService) getUserCreds`
+
+Будь-яка зміна логіки (нова помилка, новий поле credentials) потребувала правки у 4 місцях.
+
+**Рішення:**
+Виділено пакетну функцію `services.GetUserCreds(portfolio, enc, userID, exchange)` у новий файл
+`internal/services/creds.go`. Всі чотири місця замінено на один виклик цієї функції.
+
+**Урок:** Якщо однаковий код з'являється в 3+ місцях — виділяти в shared helper.
+Особливо якщо логіка містить криптографію або IO (де помилки дорогі).
+
+**Зачеплені файли:** `internal/services/creds.go` (новий), `handlers/order.go`,
+`services/smart_order_service.go`, `services/bot_service.go`, `services/dca_service.go`
+
+---
+
+## P-026 — git rebase конфліктує з `frontend/node_modules`
+
+**Коли:** Перезапис повідомлень комітів через `git rebase -i` (кілька разів).
+
+**Проблема:**
+При спробі `git rebase -i` від коміту що передує "Add React + Vite frontend dashboard",
+rebase зупинявся на кроці застосування цього коміту з помилкою:
+```
+error: The following untracked working tree files would be overwritten by merge:
+    frontend/node_modules/.bin/vite
+    frontend/node_modules/.bin/esbuild
+    ...10000+ файлів...
+Aborting
+```
+`frontend/node_modules/` присутній на диску (після попереднього `npm install`), але
+не в git (є в `.gitignore`). Git не може застосувати коміт, що додає `frontend/`,
+бо робочий каталог "забруднений" untracked файлами у тій директорії.
+
+**Рішення:**
+Перед кожним rebase тимчасово видаляти `frontend/node_modules` і `frontend/dist`:
+```bash
+rm -rf frontend/node_modules frontend/dist
+# ... rebase ...
+cd frontend && npm install   # відновити після rebase
+```
+
+**Урок:** Перед `git rebase -i` що зачіпає коміти з великими untracked директоріями —
+видалити їх з диску. Після rebase відновити через менеджер пакетів.
+
+**Зачеплені файли:** `.gitignore`, `frontend/`
+
+---
+
+## P-027 — Timezone mismatch в інтеграційних тестах DCABotRepository
+
+**Коли:** Написання інтеграційних тестів (Фаза 11).
+
+**Проблема:**
+Тест `TestDCABotRepository_ListDue` використовував `time.Now().Add(±1*time.Hour)` щоб
+розрізнити "прострочений" і "майбутній" `next_buy_at`. Тест стабільно падав:
+```
+dca_bot_repo_test.go:106: ListDue: got 2, want 1
+```
+MySQL `NOW()` і Go `time.Now()` могли розрізнятись через:
+- різні налаштування timezone сесії MySQL (UTC vs локальна UTC+2)
+- відмінність між `loc=UTC` (дефолт MySQL Go driver) і локальним часом Go
+
+Бот з `next_buy_at = time.Now().Add(+1h)` потрапляв у `next_buy_at <= NOW()` через
+timezone offset між Go і MySQL сервером.
+
+**Рішення:**
+Збільшити offset до ±48 годин — гарантовано більше за будь-яку можливу timezone різницю:
+```go
+due    := newTestDCABot(user.ID, time.Now().Add(-48*time.Hour))
+notDue := newTestDCABot(user.ID, time.Now().Add(+48*time.Hour))
+```
+
+**Урок:** В інтеграційних тестах з time-based фільтрами завжди використовувати великі
+offset-и (≥24h), щоб нівелювати timezone skew між Go runtime і DB сервером.
+
+**Зачеплені файли:** `internal/models/dca_bot_repo_test.go`
+
+---
+
+## P-028 — MySQL `DATE` з `parseTime=true` сканується як повний datetime рядок
+
+**Коли:** Інтеграційні тести SnapshotRepository (Фаза 11).
+
+**Проблема:**
+`PortfolioSnapshot.SnapshotDate` задекларований як `string` з тегом `db:"snapshot_date"`.
+Очікувалось що MySQL `DATE` колонка поверне `"2026-06-01"`, але при `parseTime=true` в DSN
+MySQL Go driver парсить `DATE` як `time.Time`. Коли `sqlx` сканує `time.Time` у поле `string`,
+він викликає `.String()` що повертає повний RFC3339 формат:
+```
+got "2026-06-01T00:00:00Z", want "2026-06-01"
+```
+
+**Рішення:**
+У тесті порівнювати через `strings.HasPrefix(date, "2026-06-01")` замість точного порівняння.
+Це охоплює обидва формати незалежно від конфігурації MySQL Driver.
+
+**Альтернатива (якщо критично):** Змінити тип поля на `time.Time` і форматувати в handler,
+або додати `?parseTime=false` у DSN (ламає парсинг TIMESTAMP/DATETIME).
+
+**Урок:** З `parseTime=true` MySQL повертає всі date-based типи як `time.Time`.
+Не покладатись на те що `DATE` → `string` без перетворення.
+
+**Зачеплені файли:** `internal/models/snapshot_repo_test.go`

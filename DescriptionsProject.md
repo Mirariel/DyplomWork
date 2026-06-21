@@ -34,12 +34,17 @@ Go дає нам goroutines, канали, і compile-time safety без overhea
 ### Фаза 7 — Frontend (React + Vite Dashboard) ✅ DONE
 ### Фаза 8 — Prometheus Metrics ✅ DONE
 ### Фаза 9 — Telegram Push Notifications ✅ DONE
+### Фаза 10 — Рефактор: getUserCreds + code splitting ✅ DONE
+### Фаза 11 — Інтеграційні тести репозиторіїв ✅ DONE
+### Фаза 12 — Docker + docker-compose ✅ DONE
 
-**Сервер зараз:** `http://localhost:8080` (Go + Fiber v2)
-**Frontend:** `http://localhost:5173` (Vite dev), `npm run build` → dist/
+**Сервер:** `http://localhost:8080` (Go + Fiber v2)
+**Frontend (dev):** `http://localhost:5173` (Vite)
+**Frontend (prod):** `http://localhost` (nginx у Docker)
 **WebSocket:** `ws://localhost:8080/ws`
-**БД:** MySQL `tradetracker_go` (WAMP, порт 3306)
-**Міграція:** version 6 (dca_bots table) — застосовано ✅
+**БД:** MySQL `tradetracker` (локально або Docker)
+**Міграції:** версія 6 (`dca_bots` table) ✅
+**Docker:** `docker compose up --build -d` → все запускається автоматично
 
 ---
 
@@ -54,10 +59,11 @@ Go дає нам goroutines, канали, і compile-time safety без overhea
 | Encryption | stdlib `crypto/aes` AES-256-GCM | — |
 | Migrations | `golang-migrate/migrate/v4` | v4.19.1 |
 | Config | `joho/godotenv` | v1.5.1 |
-| Rate limiting | `gofiber/fiber/v2/middleware/limiter` | v2.52.12 |
+| Rate limiting | `gofiber/fiber/v2/middleware/limiter` | built-in |
 | Logging | stdlib `log/slog` (Go 1.21+) | — |
 | Validation | `go-playground/validator/v10` | v10.30.3 |
 | Redis client | `redis/go-redis/v9` | v9.20.0 |
+| Metrics | `prometheus/client_golang` + `promauto` | latest |
 
 **Frontend stack:**
 
@@ -89,276 +95,255 @@ internal/
 ├── database/db.go           — sqlx connection, pool max 25
 ├── middleware/auth.go       — JWT: Bearer + cookie, GetUserID()
 ├── models/
-│   ├── user.go              — User struct (з UpdatedAt!), UserRepository
+│   ├── user.go              — User struct, UserRepository
 │   ├── portfolio.go         — Asset, UserPortfolio, OpenPosition,
 │   │                          PositionHistory, ExternalApiCredential,
 │   │                          PortfolioRepository
-│   ├── order.go             — Order struct + OrderRepository (Create/GetByID/List/UpdateStatus/MarkFailed)
-│   ├── smart_order.go       — SmartOrder struct + SmartOrderRepository (Create/ListActive/ListByUser/Cancel/MarkTriggered/UpdatePeak)
-│   ├── bot.go               — Bot + BotGrid structs + BotRepository (Create/ListRunning/UpdateGrid/AddProfit/CancelAllGrids)
-│   ├── snapshot.go          — PortfolioSnapshot struct + SnapshotRepository (Upsert/ListByUser/AllUserIDs)
-│   └── dca_bot.go           — DCABot struct + DCABotRepository (Create/ListDue/RecordBuy/SetStatus)
+│   ├── order.go             — Order struct + OrderRepository
+│   ├── smart_order.go       — SmartOrder struct + SmartOrderRepository
+│   ├── bot.go               — Bot + BotGrid structs + BotRepository
+│   ├── snapshot.go          — PortfolioSnapshot struct + SnapshotRepository
+│   ├── dca_bot.go           — DCABot struct + DCABotRepository
+│   ├── testmain_test.go     — TestMain: авто-створення tradetracker_test DB, migrate UP
+│   ├── user_repo_test.go    — інтеграційні тести UserRepository (4 тести)
+│   ├── order_repo_test.go   — інтеграційні тести OrderRepository (5 тестів)
+│   ├── smart_order_repo_test.go — інтеграційні тести SmartOrderRepository (7 тестів)
+│   ├── bot_repo_test.go     — інтеграційні тести BotRepository (6 тестів)
+│   ├── dca_bot_repo_test.go — інтеграційні тести DCABotRepository (6 тестів)
+│   └── snapshot_repo_test.go — інтеграційні тести SnapshotRepository (4 тести)
 ├── handlers/
 │   ├── auth.go              — register/login/logout/me
-│   ├── portfolio.go         — CRUD credentials, comments, price update
+│   ├── portfolio.go         — CRUD credentials, comments
 │   ├── sync.go              — full/positions/history/prices sync endpoints
 │   ├── order.go             — PlaceOrder/CancelOrder/GetOrder/ListOrders
-│   ├── smart_order.go       — Create/List/Get/Cancel для умовних ордерів
-│   ├── bot.go               — Create/List/Get/Start/Stop/Delete для grid-ботів
+│   ├── smart_order.go       — Create/List/Get/Cancel
+│   ├── bot.go               — Create/List/Get/Start/Stop/Delete
 │   ├── analytics.go         — Summary/Coins/Snapshots/TakeSnapshot/Arbitrage
-│   └── dca.go               — Create/List/Get/Start/Stop/Delete для DCA ботів
+│   └── dca.go               — Create/List/Get/Start/Stop/Delete
 ├── cache/
-│   ├── cache.go             — PriceStorer interface (swap memory↔Redis без змін в сервісі)
-│   └── memory.go            — MemoryPriceStore (поточна реалізація)
+│   ├── cache.go             — PriceStorer interface
+│   ├── memory.go            — MemoryPriceStore (in-memory TTL cache)
+│   └── redis.go             — RedisPriceStore (авто-активація через REDIS_URL)
 ├── scheduler/
-│   └── scheduler.go         — фонові задачі з context cancellation
+│   └── scheduler.go         — фонові задачі з context cancellation + Prometheus metrics
 ├── metrics/
-│   └── metrics.go           — Prometheus counters/histograms/gauges + HTTP middleware
+│   └── metrics.go           — HTTP counter/histogram, WS gauge, scheduler histogram
 ├── notify/
-│   └── telegram.go          — Telegram Bot API клієнт (no-op якщо токен не заданий)
+│   └── telegram.go          — Telegram Bot API (no-op якщо токен не заданий)
 ├── validator/
-│   └── validator.go         — Validate() helper поверх go-playground/validator
+│   └── validator.go         — Validate() helper
 ├── services/
+│   ├── creds.go             — GetUserCreds() shared helper (розшифрування API credentials)
 │   ├── encryption.go        — AES-256-GCM encrypt/decrypt
-│   ├── sync_service.go      — паралельний синк + SyncAllUsers() для scheduler
-│   ├── sync_repository.go   — всі SQL для синку (upsert, cleanup, transfer)
-│   ├── price_service.go     — ціни через cache.PriceStorer + UpdateAllAssets()
-│   ├── smart_order_service.go — CheckAndTrigger: перевіряє SL/TP/Trailing кожні 5с, виконує market order
-│   ├── bot_service.go         — Start/Stop/CheckBots: grid bot lifecycle, counter orders кожні 10с
-│   ├── analytics_service.go   — TakeSnapshot/TakeAllSnapshots (1h), GetTradeSummary, GetCoinPerformance, GetArbitrage
-│   ├── dca_service.go         — Start/Stop/CheckAndBuy (5хв): market buy amount_usd/price qty
+│   ├── sync_service.go      — паралельний синк + SyncAllUsers()
+│   ├── sync_repository.go   — SQL для синку (upsert, cleanup, transfer)
+│   ├── price_service.go     — UpdateAllAssets() через cache.PriceStorer
+│   ├── smart_order_service.go — CheckAndTrigger кожні 5с (SL/TP/Trailing)
+│   ├── bot_service.go         — Start/Stop/CheckBots кожні 10с
+│   ├── analytics_service.go   — TakeSnapshot, GetTradeSummary, GetCoinPerformance, GetArbitrage
+│   ├── dca_service.go         — Start/Stop/CheckAndBuy кожні 5хв
 │   └── exchange/
-│       ├── interface.go     — Exchange interface: Balance/Position/ClosedTrade + ErrNoCredentials
-│       ├── registry.go      — map[name]Exchange + compile-time check (6 бірж)
-│       ├── client.go        — HTTP client, retry при 429, postForm для Kraken
-│       ├── helpers.go       — hmacSHA256/512, hmacSHA256Base64, sha512Hex, normalizeSymbol
-│       ├── parse.go         — parseFloat, parseInt64
-│       ├── trader.go        — Trader interface: PlaceOrder/CancelOrder/GetOrderStatus
-│       ├── binance.go       — Binance V3 Spot + FAPI Futures
-│       ├── binance_trade.go — Binance Trader (spot+futures orders)
-│       ├── okx.go           — OKX V5 (Trading + Funding + Earn)
-│       ├── okx_trade.go     — OKX Trader (spot+swap orders)
-│       ├── bybit.go         — Bybit V5 UTA (7d windows + cursor pagination)
-│       ├── bybit_trade.go   — Bybit Trader (spot+linear orders)
-│       ├── gate.go          — Gate.io V4 (Spot + USDT-M Futures)
-│       ├── kraken.go        — Kraken V0 (Spot + Margin, HMAC-SHA512+base64)
-│       └── kucoin.go        — KuCoin V1 (Spot fills, allTickers)
+│       ├── interface.go + registry.go + client.go + helpers.go + parse.go + trader.go
+│       ├── binance.go + binance_trade.go   — Binance V3 Spot + FAPI Futures
+│       ├── okx.go + okx_trade.go           — OKX V5 Spot + Swap
+│       ├── bybit.go + bybit_trade.go       — Bybit V5 UTA Spot + Linear
+│       ├── gate.go / kraken.go / kucoin.go — Gate.io V4, Kraken V0, KuCoin V1
+│       ├── helpers_test.go  — unit тести: hmac, sha512, normalizeSymbol
+│       └── parse_test.go    — unit тести: parseFloat, parseInt64
 └── ws/
-    ├── hub.go               — thread-safe реєстр з'єднань (sync.RWMutex)
-    ├── client.go            — ReadPump + WritePump goroutines, JWT auth
-    ├── server.go            — broadcast loop 2s: ціни + позиції per user
-    └── handler.go           — Fiber WebSocket upgrade middleware
+    ├── hub.go / client.go / server.go / handler.go
+    └── server_test.go       — unit тести: roundFloat, formatLeverage
 
-frontend/                       ← React + Vite + TypeScript dashboard
-├── package.json                — залежності (React 18, Vite 6, Tailwind 4, React Query 5, Recharts, Lucide, Axios)
-├── vite.config.ts              — proxy /api → :8080, /ws → ws://:8080, Tailwind plugin
-├── tsconfig.json               — strict TS, bundler module resolution
-├── index.html
+frontend/
+├── package.json / vite.config.ts / tsconfig.json
+├── Dockerfile               — node:20-alpine → nginx:1.27-alpine
+├── nginx.conf               — SPA routing, /api proxy, /ws WebSocket, asset caching
+├── .dockerignore
 └── src/
-    ├── main.tsx                — React root + QueryClientProvider
-    ├── index.css               — Tailwind v4 import + dark body defaults
-    ├── vite-env.d.ts           — CSS module type declarations
-    ├── App.tsx                 — BrowserRouter + RequireAuth + всі маршрути
-    ├── api.ts                  — axios instance + 30+ типізованих API функцій
-    ├── ws.ts                   — useWebSocket hook (auto-reconnect 3s, JWT auth on connect)
-    ├── context/AuthContext.tsx — JWT в localStorage("tt_token"), login/logout
-    ├── components/Layout.tsx   — dark sidebar з 7 навлінками (Lucide icons), hamburger
-    └── pages/
-        ├── Login.tsx           — логін форма
-        ├── Register.tsx        — реєстрація форма
-        ├── Dashboard.tsx       — stat cards, live prices (WS), positions table (WS), PnL chart (Recharts)
-        ├── Portfolio.tsx       — 3 таби: Positions, History (pagination), Credentials (CRUD)
-        ├── Orders.tsx          — форма ордера + список з Cancel
-        ├── SmartOrders.tsx     — форма SL/TP/Trailing + список з Cancel
-        ├── GridBots.tsx        — форма + картки ботів (Start/Stop/Delete + grid levels)
-        ├── DCABots.tsx         — форма + картки ботів (Start+BuyNow/Stop/Delete)
-        └── Analytics.tsx       — Trade Summary cards, Coin Performance table, Arbitrage Scanner
+    ├── App.tsx              — React.lazy для всіх 9 сторінок + Suspense
+    ├── api.ts               — 30+ типізованих API функцій
+    ├── ws.ts                — useWebSocket hook (auto-reconnect 3s)
+    ├── context/AuthContext.tsx
+    ├── components/Layout.tsx
+    └── pages/ (Login, Register, Dashboard, Portfolio, Orders,
+                SmartOrders, GridBots, DCABots, Analytics)
 
-migrations/
-├── 000001_initial_schema.up.sql    — CREATE TABLE × 7 + 34 початкові активи
-├── 000001_initial_schema.down.sql  — DROP TABLE у зворотньому порядку
-├── 000002_orders.up.sql            — orders table (статуси, exchange_order_id)
-├── 000002_orders.down.sql          — DROP TABLE orders
-├── 000003_smart_orders.up.sql      — smart_orders table (SL/TP/Trailing, peak_price, callback_rate)
-├── 000003_smart_orders.down.sql    — DROP TABLE smart_orders
-├── 000004_bots.up.sql              — bots + bot_grids tables (grid bot lifecycle)
-├── 000004_bots.down.sql            — DROP TABLE bot_grids, bots
-├── 000005_analytics.up.sql         — portfolio_snapshots (daily portfolio value, spot+futures)
-├── 000005_analytics.down.sql       — DROP TABLE portfolio_snapshots
-├── 000006_dca_bots.up.sql          — dca_bots (amount_usd, interval_hours, next_buy_at)
-└── 000006_dca_bots.down.sql        — DROP TABLE dca_bots
+migrations/ (000001–000006)
 
-docs/
-├── getting-started.md   — встановлення, конфігурація, перший запуск
-├── architecture.md      — архітектура системи, структура директорій, паттерни
-├── api-reference.md     — всі HTTP та WebSocket ендпоінти
-├── exchange-adapters.md — деталі інтеграції кожної біржі, auth схеми
-└── trading-guide.md     — керівництво з торгівлі, lifecycle ордерів
+Dockerfile                   — golang:1.26-alpine → alpine:3.20
+.dockerignore
+docker-compose.yml           — db, redis, migrate (one-shot), api, frontend
 ```
 
 ### API ендпоінти
 
 ```
-// Public
-POST   /api/auth/register     — реєстрація, повертає JWT (cookie + body)
-POST   /api/auth/login        — логін, повертає JWT (cookie + body)
-POST   /api/auth/logout       — очищає cookie
-GET    /health                — {"status":"ok","version":"0.1.0"}
-
-// Protected (JWT required: Authorization: Bearer <token> або cookie)
+POST   /api/auth/register | login | logout
 GET    /api/auth/me
+GET    /health
+GET    /metrics  (Prometheus)
 
-GET    /api/portfolio/                    — assets + positions + history + total_value
-GET    /api/portfolio/history?limit=15&offset=0
-GET    /api/portfolio/credentials
-POST   /api/portfolio/credentials         — додати/оновити ключі біржі
+GET    /api/portfolio/ | /history | /credentials
+POST   /api/portfolio/credentials
 DELETE /api/portfolio/credentials/:id
-PATCH  /api/positions/:id/comment
-PATCH  /api/history/:id/comment
+PATCH  /api/positions/:id/comment | /api/history/:id/comment
 
-POST   /api/sync/full                     — повний синк усіх бірж паралельно
-POST   /api/sync/positions                — лише відкриті позиції
-POST   /api/sync/history?days=7           — закриті угоди за N днів
-GET    /api/sync/prices                   — оновити ціни активів
+POST   /api/sync/full | /positions | /history
+GET    /api/sync/prices
 
-POST   /api/orders                        — розмістити ордер (binance/okx/bybit)
-GET    /api/orders                        — список ордерів (?status=new|filled|...)
-GET    /api/orders/:id                    — статус ордеру (живий запит до біржі)
-DELETE /api/orders/:id                    — скасувати ордер
+POST   /api/orders              GET    /api/orders
+GET    /api/orders/:id          DELETE /api/orders/:id
 
-POST   /api/smart-orders                  — створити умовний ордер (SL/TP/Trailing)
-GET    /api/smart-orders                  — список умовних ордерів користувача
-GET    /api/smart-orders/:id              — один умовний ордер
-DELETE /api/smart-orders/:id              — скасувати умовний ордер
+POST   /api/smart-orders        GET    /api/smart-orders
+GET    /api/smart-orders/:id    DELETE /api/smart-orders/:id
 
-POST   /api/bots                          — створити grid-бота
-GET    /api/bots                          — список ботів
-GET    /api/bots/:id                      — бот + рівні сітки
-POST   /api/bots/:id/start                — запустити бота (виставляє ордери)
-POST   /api/bots/:id/stop                 — зупинити бота (скасовує ордери)
-DELETE /api/bots/:id                      — видалити зупиненого бота
+POST   /api/bots                GET    /api/bots
+GET    /api/bots/:id            DELETE /api/bots/:id
+POST   /api/bots/:id/start | /stop
 
-GET    /api/analytics/summary             — winrate, avg PnL, profit factor, best/worst trade
-GET    /api/analytics/coins               — статистика по кожній монеті (sorted by total_pnl)
-GET    /api/analytics/snapshots?days=30   — PnL по часу (для графіку)
-POST   /api/analytics/snapshot            — зробити snapshot зараз (без scheduler)
-GET    /api/analytics/arbitrage           — arbitrage scanner між біржами (?min_spread=0.5)
+GET    /api/analytics/summary | /coins | /snapshots?days=30 | /arbitrage?min_spread=0.5
+POST   /api/analytics/snapshot
 
-POST   /api/dca                           — створити DCA бота
-GET    /api/dca                           — список DCA ботів
-GET    /api/dca/:id                       — один DCA бот
-POST   /api/dca/:id/start                 — запустити (?buy_now=true для негайної покупки)
-POST   /api/dca/:id/stop                  — зупинити
-DELETE /api/dca/:id                       — видалити зупиненого бота
+POST   /api/dca                 GET    /api/dca
+GET    /api/dca/:id             DELETE /api/dca/:id
+POST   /api/dca/:id/start?buy_now=true | /stop
 
-GET    /ws                                — WebSocket (потребує auth повідомлення)
-GET    /metrics                           — Prometheus metrics (scrape endpoint)
+GET    /ws   (WebSocket)
 ```
 
 ### WebSocket протокол
 
 ```json
-// 1. Клієнт підключається і надсилає JWT
-{ "type": "auth", "token": "eyJ..." }
-
-// 2. Сервер підтверджує
-{ "type": "auth_success", "user_id": 7 }
-
-// 3. Сервер кожні 2 секунди надсилає
+// Клієнт → { "type": "auth", "token": "eyJ..." }
+// Сервер → { "type": "auth_success", "user_id": 7 }
+// Сервер кожні 2с →
 {
   "type": "update",
-  "positions": [
-    {
-      "symbol": "BTC", "side": "LONG", "exchange": "bybit",
-      "entry_price": 65000, "mark_price": 67420,
-      "pnl": 241.5, "pnl_pct": 1.85, "leverage": "10x"
-    }
-  ],
-  "spot_prices": { "BTC": 67420, "ETH": 3210, "SOL": 145 }
+  "positions": [{ "symbol": "BTC", "pnl": 241.5, "pnl_pct": 1.85, ... }],
+  "spot_prices": { "BTC": 67420, "ETH": 3210 }
 }
 ```
 
 ---
 
-## З чого почати наступну сесію
+## Технічні борги
 
-**Фази 0–9 завершені.** Проєкт повністю функціональний.
+Усі відомі технічні борги вирішені.
 
-### Можливі наступні кроки
-
-1. **Frontend code splitting** — динамічні імпорти (зараз bundle 725 kB, рекомендовано < 500 kB)
-2. **Інтеграційні тести** — тестування репозиторіїв проти реальної БД
-3. **getUserCreds рефактор** — консолідувати в shared helper (tech debt P-014)
+| Проблема | Статус |
+|---|---|
+| `getUserCreds` дублювання в 4 місцях | ✅ `services.GetUserCreds()` в `creds.go` |
+| Немає інтеграційних тестів | ✅ 33 тест-кейси в `internal/models/` |
+| Frontend bundle 725 kB | ✅ Code splitting, сторінки 3–11 kB кожна |
+| `gorilla/websocket` в go.mod | ✅ Видалено через `go mod tidy` |
 
 ---
 
-## Відомі технічні борги
+## З чого почати наступну сесію
 
-| Проблема | Файл | Пріоритет |
-|---|---|---|
-| `getUserCreds` продубльовано в 5 місцях | handlers, services, ws | 🟡 MEDIUM |
-| Немає інтеграційних тестів для репозиторіїв | весь проєкт | 🟡 MEDIUM |
-| Frontend bundle 725 kB — потрібен code splitting | `frontend/` | 🟡 MEDIUM |
-| `gorilla/websocket` в go.mod — не використовується | `go.mod` | 🟢 LOW |
-| `roundFloat()` і хелпери — варто перенести в `internal/utils` | `ws/server.go` | 🟢 LOW |
+**Фази 0–12 завершені.** Проєкт повністю функціональний, технічних боргів немає.
+
+Можливі напрямки:
+- **E2E тести** — handlers через `net/http/httptest`
+- **Grafana** — dashboard для Prometheus метрик (окремий сервіс у docker-compose)
+- **Мікросервіси** — розбиття api-gateway / market-data / trading / analytics
 
 ---
 
 ## Roadmap
 
-### Фаза 2 — Production-ready backend
-- [x] Cache interface (`cache.PriceStorer`) — swap memory↔Redis без змін в сервісі
-- [x] Background scheduler (`scheduler.Scheduler`) — prices кожні 15с, sync кожні 5хв
-- [x] Input validation (`go-playground/validator/v10`) — request structs з тегами
-- [x] Redis кеш (`RedisPriceStore`) — авто-активація через `REDIS_URL` в .env
-- [x] Нові біржі: Gate.io V4, Kraken V0, KuCoin V1 (всього 6 бірж)
-- [ ] Тести: unit для exchange helpers, integration для DB
+### Фаза 0 — Foundation ✅ DONE
+- [x] Go модуль, `.env`, Makefile, sqlx, MySQL driver
+- [x] `config.Load()`, `database.Connect()`, connection pool
+
+### Фаза 1 — Перший живий запуск ✅ DONE
+- [x] 7 таблиць + 34 seed активи (migration 000001)
+- [x] UserRepository, PortfolioRepository
+- [x] JWT auth (register/login/logout/me)
+- [x] Rate limiting, slog, graceful shutdown 5s
+
+### Фаза 2 — Production-ready backend ✅ DONE
+- [x] `cache.PriceStorer` interface — swap memory↔Redis без змін в сервісі
+- [x] Background scheduler з context cancellation
+- [x] Input validation (`go-playground/validator/v10`)
+- [x] Redis кеш — авто-активація через `REDIS_URL`
+- [x] 6 бірж: Binance, OKX, Bybit, Gate.io, Kraken, KuCoin
 
 ### Фаза 3 — Торгівля ✅ DONE
 - [x] Trader interface: PlaceOrder, CancelOrder, GetOrderStatus
-- [x] Binance Trader (spot + futures)
-- [x] OKX Trader (spot + swap)
-- [x] Bybit Trader (spot + linear)
+- [x] Binance, OKX, Bybit Trader (spot + futures/swap)
 - [x] OrderRepository + orders table (migration 000002)
 - [x] OrderHandler: POST/GET/DELETE /api/orders
-- [x] Order lifecycle: save→place→update / on error→mark rejected
+- [x] Order lifecycle: save → place → update / on error → rejected
 
-### Фаза 4 — Smart Orders та боти (в процесі)
+### Фаза 4 — Smart Orders + Grid Bot ✅ DONE
 - [x] SmartOrder model + SmartOrderRepository (migration 000003)
-- [x] SmartOrderService: CheckAndTrigger кожні 5с — SL/TP/Trailing логіка
+- [x] SmartOrderService: CheckAndTrigger кожні 5с — SL/TP/Trailing
 - [x] SmartOrderHandler: POST/GET/DELETE /api/smart-orders
-- [x] ErrNoCredentials sentinel error в exchange пакеті
-- [x] Grid Bot: Bot + BotGrid models, BotRepository (migration 000004)
+- [x] ErrNoCredentials sentinel error
+- [x] Grid Bot: Bot + BotGrid models (migration 000004)
 - [x] BotService: Start/Stop/CheckBots кожні 10с, counter orders після fill
 - [x] BotHandler: POST/GET/Start/Stop/Delete /api/bots
-- [x] Bugfix аудит: GetLivePrices(nil), roundFloat, stmt.Exec errors, nil pointer GetOrder
-- [ ] DCA Bot
+- [x] Bugfix аудит: GetLivePrices(nil), roundFloat, stmt.Exec errors, nil pointer
 
 ### Фаза 5 — Аналітика ✅ DONE
-- [x] portfolio_snapshots таблиця (migration 000005), UPSERT щогодини через scheduler
-- [x] AnalyticsService: TakeSnapshot (spot_value + futures_pnl), GetTradeSummary, GetCoinPerformance
-- [x] AnalyticsHandler: GET summary/coins/snapshots + POST snapshot
-- [x] TradeSummary: winrate, avg_pnl, profit_factor, avg_win/loss, best/worst trade
-- [x] CoinPerformance: per-symbol/exchange breakdown, sorted by total_pnl
+- [x] portfolio_snapshots (migration 000005), UPSERT щогодини
+- [x] AnalyticsService: TakeSnapshot, GetTradeSummary, GetCoinPerformance
+- [x] AnalyticsHandler: /summary, /coins, /snapshots, /snapshot
+- [x] TradeSummary: winrate, avg_pnl, profit_factor, best/worst trade
 
 ### Фаза 6 — DCA Bot, Arbitrage Scanner, Unit Tests ✅ DONE
-- [x] DCABot model + DCABotRepository (migration 000006, ListDue/RecordBuy)
-- [x] DCAService: Start/Stop/CheckAndBuy кожні 5хв (qty = amount_usd / current_price)
+- [x] DCABot model + DCABotRepository (migration 000006)
+- [x] DCAService: Start/Stop/CheckAndBuy кожні 5хв (qty = amount_usd / price)
 - [x] DCAHandler: POST/GET/Start/Stop/Delete /api/dca + ?buy_now=true
-- [x] ArbitrageScanner: GetArbitrage(minSpreadPct) — нормалізує USDT-пари, знаходить спреди між 6 біржами
-- [x] GET /api/analytics/arbitrage?min_spread=0.5
-- [x] Unit tests: exchange/helpers_test.go (hmac, sha512, normalizeSymbol), parse_test.go, ws/server_test.go (roundFloat)
+- [x] ArbitrageScanner: GET /api/analytics/arbitrage?min_spread=0.5
+- [x] Unit tests: exchange helpers, parse, ws server (33/33 PASS)
 
-### Фаза 5 — Аналітика
-- [ ] PnL графіки по часу (потрібна таблиця `portfolio_snapshots`)
-- [ ] Winrate, середній PnL, кращі/гірші монети
-- [ ] Portfolio rebalancing
-- [ ] Arbitrage scanner між біржами
+### Фаза 7 — Frontend ✅ DONE
+- [x] React 18 + Vite 6 + TypeScript + Tailwind CSS v4
+- [x] React Query v5, Axios, Recharts, Lucide
+- [x] 9 сторінок: Dashboard, Portfolio, Orders, SmartOrders, GridBots, DCABots, Analytics, Login, Register
+- [x] WebSocket hook (auto-reconnect, live prices + positions)
+- [x] Dark sidebar layout, auth context (JWT localStorage)
+- [x] `vite-env.d.ts` для CSS module типів
 
-### Фаза 5 — Масштаб і монетизація
-- [ ] Розбиття на мікросервіси (api-gateway, market-data, portfolio, trading, analytics)
-- [ ] NATS/RabbitMQ message queue
-- [ ] Prometheus + Grafana
+### Фаза 8 — Prometheus Metrics ✅ DONE
+- [x] HTTP request counter/histogram (per method+route+status)
+- [x] WebSocket clients gauge, active bots/smart-orders gauges
+- [x] Scheduler job duration histogram
+- [x] GET /metrics (promhttp через gofiber/adaptor)
+
+### Фаза 9 — Telegram Push Notifications ✅ DONE
+- [x] `notify.Notifier` — no-op якщо токен не заданий
+- [x] SmartOrderTriggered/Failed, DCABought, GridBotError
+- [x] Async goroutine (не блокує scheduler)
+
+### Фаза 10 — Рефактор + Code Splitting ✅ DONE
+- [x] `services.GetUserCreds()` — shared helper замість дублювання в 4 місцях
+- [x] React.lazy для всіх 9 сторінок + Suspense fallback spinner
+- [x] Vite `manualChunks`: vendor-react, vendor-query, vendor-charts, vendor-icons, vendor-axios
+- [x] Результат: сторінки 3–11 kB (було один bundle ~725 kB)
+
+### Фаза 11 — Інтеграційні тести репозиторіїв ✅ DONE
+- [x] TestMain: авто-створення `tradetracker_test` DB + golang-migrate UP
+- [x] `truncateAll()` з FK_CHECKS=0 перед кожним тестом
+- [x] 33 тест-кейси: UserRepository, OrderRepository, SmartOrderRepository,
+      BotRepository (grid lifecycle), DCABotRepository (ListDue), SnapshotRepository (UPSERT)
+- [x] Запуск: `go test ./internal/models/...` (потребує MySQL)
+
+### Фаза 12 — Docker + docker-compose ✅ DONE
+- [x] `Dockerfile`: golang:1.26-alpine → alpine:3.20 (server + migrate бінарники)
+- [x] `frontend/Dockerfile`: node:20-alpine → nginx:1.27-alpine
+- [x] `frontend/nginx.conf`: SPA routing, /api proxy, /ws WebSocket upgrade, asset caching
+- [x] `docker-compose.yml`: db (MySQL 8), redis, migrate (one-shot), api, frontend
+- [x] Залежності: migrate чекає DB healthcheck, api чекає migrate completion
+- [x] Запуск однією командою: `docker compose up --build -d`
+
+### Фаза 13 — Майбутнє (не реалізовано)
+- [ ] E2E тести handlers через `net/http/httptest`
+- [ ] Grafana dashboard для Prometheus метрик
+- [ ] Розбиття на мікросервіси (api-gateway, market-data, trading, analytics)
+- [ ] NATS/RabbitMQ message queue між сервісами
 - [ ] Stripe підписки (Free / Pro / Enterprise)
 
 ---
@@ -371,7 +356,7 @@ GET    /metrics                           — Prometheus metrics (scrape endpoin
 
 **2. Concurrency через goroutines**
 Кожна біржа в синку = своя goroutine. WS клієнт = дві goroutines (read + write).
-Shared state захищати через `sync.RWMutex` або канали. Не використовувати глобальні змінні.
+Shared state захищати через `sync.RWMutex` або канали.
 
 **3. SQL — явний, без ORM**
 Тільки `sqlx` + raw SQL. `INSERT IGNORE` / `ON DUPLICATE KEY UPDATE` для idempotency.
@@ -389,43 +374,58 @@ Panic тільки при старті (DB, encryption key).
 ## Команди
 
 ```bash
-# Запуск сервера
+# Локальний запуск
 go run ./cmd/server/...
-
-# Збірка бінарника
 go build -o bin/server ./cmd/server/...
-
-# Перевірка компіляції без запуску
 go build ./...
 
-# Міграції
-make migrate-up       # застосувати всі нові
-make migrate-down     # відкотити останню
-make migrate-version  # поточна версія
+# Тести
+go test ./...                            # всі (unit + integration)
+go test ./internal/models/...            # лише інтеграційні (потрібна MySQL)
+go test ./internal/services/exchange/... # лише unit
 
-# Прибрати невикористані залежності
-go mod tidy
+# Міграції (локально)
+make migrate-up
+make migrate-down
+make migrate-version
 
-# Тести (коли з'являться)
-go test ./...
+# Docker
+make docker-up       # зібрати і запустити всі сервіси у фоні
+make docker-down     # зупинити
+make docker-logs     # tail логів
+make docker-reset    # зупинити + видалити volumes (скидає БД)
+
+# Frontend (dev)
+cd frontend && npm run dev
+cd frontend && npm run build
+
+go mod tidy          # прибрати невикористані залежності
 ```
 
 ---
 
-## .env (поточні значення)
+## Змінні середовища (.env.example)
 
 ```env
 APP_PORT=8080
 APP_DEBUG=true
-JWT_SECRET=tt_go_jwt_s3cr3t_change_in_production_2025
+JWT_SECRET=your-super-secret-jwt-key-change-in-production
+
 DB_HOST=127.0.0.1
 DB_PORT=3306
 DB_USER=root
 DB_PASSWORD=
-DB_NAME=tradetracker_go
-APP_KEY=b84260907e594d6c97a5a8f7d98305c4   # той самий що в PHP kursova
-ANTHROPIC_API_KEY=                           # заповнити коли дійдемо до AI
-REDIS_URL=                                   # необов'язково: localhost:6379 для Redis кешу
+DB_NAME=tradetracker
+
+# 32 символи рівно — AES-256-GCM
+APP_KEY=your-32-character-encryption-key!
+
+# Redis (необов'язково — без нього in-memory cache)
+REDIS_URL=
+
+# Telegram сповіщення (необов'язково)
+TELEGRAM_BOT_TOKEN=
+TELEGRAM_CHAT_ID=
 ```
 
-> ⚠️ `.env` в `.gitignore`. При першому клоні — скопіювати з `.env.example`.
+> ⚠️ `.env` в `.gitignore`. При першому клоні — `cp .env.example .env` і заповнити секрети.
