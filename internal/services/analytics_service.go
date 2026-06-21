@@ -126,8 +126,8 @@ func (s *AnalyticsService) GetTradeSummary(userID int64) (TradeSummary, error) {
 	var r row
 	err := s.db.Get(&r, `
 		SELECT
-		    COUNT(*)                                          AS total_trades,
-		    SUM(CASE WHEN realized_pnl > 0 THEN 1 ELSE 0 END) AS winning_trades,
+		    COUNT(*)                                                      AS total_trades,
+		    COALESCE(SUM(CASE WHEN realized_pnl > 0 THEN 1 ELSE 0 END), 0) AS winning_trades,
 		    COALESCE(SUM(realized_pnl), 0)                   AS total_realized_pnl,
 		    COALESCE(AVG(realized_pnl), 0)                   AS avg_pnl,
 		    COALESCE(MAX(realized_pnl), 0)                   AS best_trade,
