@@ -5,7 +5,7 @@ import { useAuth } from '../context/AuthContext'
 
 export default function Login() {
   const { login } = useAuth()
-  const [email, setEmail] = useState('')
+  const [loginId, setLoginId] = useState('')
   const [password, setPassword] = useState('')
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
@@ -15,7 +15,7 @@ export default function Login() {
     setError('')
     setLoading(true)
     try {
-      await login(email, password)
+      await login(loginId, password)
     } catch (err: unknown) {
       if (
         err &&
@@ -56,14 +56,14 @@ export default function Login() {
           <form onSubmit={(e) => void handleSubmit(e)} className="space-y-4">
             <div>
               <label className="block text-sm font-medium text-slate-300 mb-1.5">
-                Email
+                Email or Username
               </label>
               <input
-                type="email"
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
+                type="text"
+                value={loginId}
+                onChange={(e) => setLoginId(e.target.value)}
                 required
-                placeholder="you@example.com"
+                placeholder="you@example.com or yourname"
                 className="w-full px-3 py-2.5 bg-slate-700 border border-slate-600 rounded-lg text-white placeholder-slate-400 text-sm focus:outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500"
               />
             </div>

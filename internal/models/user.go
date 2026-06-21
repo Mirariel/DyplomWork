@@ -33,6 +33,16 @@ func (r *UserRepository) FindByEmail(email string) (*User, error) {
 	return &u, nil
 }
 
+// FindByEmailOrUsername — один SQL запит для логіну по email або username
+func (r *UserRepository) FindByEmailOrUsername(login string) (*User, error) {
+	var u User
+	err := r.db.Get(&u, "SELECT * FROM users WHERE email = ? OR username = ? LIMIT 1", login, login)
+	if err != nil {
+		return nil, err
+	}
+	return &u, nil
+}
+
 func (r *UserRepository) FindByID(id int64) (*User, error) {
 	var u User
 	err := r.db.Get(&u, "SELECT * FROM users WHERE id = ? LIMIT 1", id)
@@ -61,4 +71,27 @@ func (r *UserRepository) Create(username, email, password string) (*User, error)
 
 func (r *UserRepository) CheckPassword(user *User, password string) bool {
 	return bcrypt.CompareHashAndPassword([]byte(user.Password), []byte(password)) == nil
+}
+
+func (r *UserRepository) UpdateProfile(id int64, username, email string) (*User, error) {
+	_, err := r.db.Exec(
+		"UPDATE users SET username = ?, email = ?, updated_at = NOW() WHERE id = ?",
+		username, email, id,
+	)
+	if err != nil {
+		return nil, err
+	}
+	return r.FindByID(id)
+}
+
+func (r *UserRepository) UpdatePassword(id int64, newPassword string) error {
+	hash, err := bcrypt.GenerateFromPassword([]byte(newPassword), bcrypt.DefaultCost)
+	if err != nil {
+		return err
+	}
+	_, err = r.db.Exec(
+		"UPDATE users SET password = ?, updated_at = NOW() WHERE id = ?",
+		string(hash), id,
+	)
+	return err
 }

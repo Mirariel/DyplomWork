@@ -19,6 +19,7 @@ api.interceptors.request.use((config) => {
 
 export interface User {
   id: number
+  username: string
   email: string
   created_at: string
 }
@@ -267,17 +268,23 @@ export interface CreateDCAPayload {
 
 // ─── Auth ─────────────────────────────────────────────────────────────────────
 
-export const login = (email: string, password: string) =>
-  api.post<AuthResponse>('/auth/login', { email, password }).then((r) => r.data)
+export const login = (login: string, password: string) =>
+  api.post<AuthResponse>('/auth/login', { login, password }).then((r) => r.data)
 
-export const register = (email: string, password: string) =>
-  api.post<AuthResponse>('/auth/register', { email, password }).then((r) => r.data)
+export const register = (username: string, email: string, password: string) =>
+  api.post<AuthResponse>('/auth/register', { username, email, password }).then((r) => r.data)
 
 export const logout = () =>
   api.post('/auth/logout').then((r) => r.data)
 
 export const me = () =>
   api.get<User>('/auth/me').then((r) => r.data)
+
+export const updateProfile = (username: string, email: string) =>
+  api.patch<User>('/user/profile', { username, email }).then((r) => r.data)
+
+export const changePassword = (current_password: string, new_password: string) =>
+  api.patch('/user/password', { current_password, new_password }).then((r) => r.data)
 
 // ─── Portfolio ────────────────────────────────────────────────────────────────
 

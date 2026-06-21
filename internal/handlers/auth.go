@@ -26,7 +26,7 @@ type registerRequest struct {
 }
 
 type loginRequest struct {
-	Email    string `json:"email"    validate:"required,email"`
+	Login    string `json:"login"    validate:"required"`
 	Password string `json:"password" validate:"required"`
 }
 
@@ -52,9 +52,8 @@ func (h *AuthHandler) Register(c *fiber.Ctx) error {
 
 	h.setTokenCookie(c, token)
 	return c.Status(fiber.StatusCreated).JSON(fiber.Map{
-		"token":    token,
-		"user_id":  user.ID,
-		"username": user.Username,
+		"token": token,
+		"user":  user,
 	})
 }
 
@@ -68,7 +67,7 @@ func (h *AuthHandler) Login(c *fiber.Ctx) error {
 		return c.Status(fiber.StatusUnprocessableEntity).JSON(fiber.Map{"error": err.Error()})
 	}
 
-	user, err := h.users.FindByEmail(req.Email)
+	user, err := h.users.FindByEmailOrUsername(req.Login)
 	if err != nil || !h.users.CheckPassword(user, req.Password) {
 		return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{"error": "invalid credentials"})
 	}
@@ -80,9 +79,8 @@ func (h *AuthHandler) Login(c *fiber.Ctx) error {
 
 	h.setTokenCookie(c, token)
 	return c.JSON(fiber.Map{
-		"token":    token,
-		"user_id":  user.ID,
-		"username": user.Username,
+		"token": token,
+		"user":  user,
 	})
 }
 
@@ -103,11 +101,57 @@ func (h *AuthHandler) Me(c *fiber.Ctx) error {
 	if err != nil {
 		return c.Status(fiber.StatusNotFound).JSON(fiber.Map{"error": "user not found"})
 	}
-	return c.JSON(fiber.Map{
-		"id":       user.ID,
-		"username": user.Username,
-		"email":    user.Email,
-	})
+	return c.JSON(user)
+}
+
+type updateProfileRequest struct {
+	Username string `json:"username" validate:"required,min=3,max=50"`
+	Email    string `json:"email"    validate:"required,email"`
+}
+
+type changePasswordRequest struct {
+	CurrentPassword string `json:"current_password" validate:"required"`
+	NewPassword     string `json:"new_password"     validate:"required,min=6"`
+}
+
+// PATCH /api/user/profile
+func (h *AuthHandler) UpdateProfile(c *fiber.Ctx) error {
+	userID := middleware.GetUserID(c)
+	var req updateProfileRequest
+	if err := c.BodyParser(&req); err != nil {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "invalid body"})
+	}
+	if err := validator.Validate(&req); err != nil {
+		return c.Status(fiber.StatusUnprocessableEntity).JSON(fiber.Map{"error": err.Error()})
+	}
+	user, err := h.users.UpdateProfile(userID, req.Username, req.Email)
+	if err != nil {
+		return c.Status(fiber.StatusConflict).JSON(fiber.Map{"error": "username or email already taken"})
+	}
+	return c.JSON(user)
+}
+
+// PATCH /api/user/password
+func (h *AuthHandler) ChangePassword(c *fiber.Ctx) error {
+	userID := middleware.GetUserID(c)
+	var req changePasswordRequest
+	if err := c.BodyParser(&req); err != nil {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "invalid body"})
+	}
+	if err := validator.Validate(&req); err != nil {
+		return c.Status(fiber.StatusUnprocessableEntity).JSON(fiber.Map{"error": err.Error()})
+	}
+	user, err := h.users.FindByID(userID)
+	if err != nil {
+		return c.Status(fiber.StatusNotFound).JSON(fiber.Map{"error": "user not found"})
+	}
+	if !h.users.CheckPassword(user, req.CurrentPassword) {
+		return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{"error": "incorrect current password"})
+	}
+	if err := h.users.UpdatePassword(userID, req.NewPassword); err != nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "failed to update password"})
+	}
+	return c.JSON(fiber.Map{"status": "ok"})
 }
 
 func (h *AuthHandler) generateToken(user *models.User) (string, error) {

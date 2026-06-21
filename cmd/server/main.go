@@ -206,15 +206,16 @@ func main() {
 
 	// --- Public routes ---
 	auth := app.Group("/api/auth")
-	auth.Use(authLimiter)
-	auth.Post("/register", authHandler.Register)
-	auth.Post("/login", authHandler.Login)
+	auth.Post("/register", authLimiter, authHandler.Register)
+	auth.Post("/login", authLimiter, authHandler.Login)
 	auth.Post("/logout", authHandler.Logout)
 
 	// --- Protected routes ---
 	api := app.Group("/api", middleware.JWTAuth(cfg.JWTSecret))
 
 	api.Get("/auth/me", authHandler.Me)
+	api.Patch("/user/profile", authHandler.UpdateProfile)
+	api.Patch("/user/password", authHandler.ChangePassword)
 
 	// Portfolio
 	portfolio := api.Group("/portfolio")

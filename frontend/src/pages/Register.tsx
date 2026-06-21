@@ -1,17 +1,19 @@
-import { useState, type FormEvent } from 'react'
-import { Link, useNavigate } from 'react-router-dom'
+import { useState, useCallback, type FormEvent } from 'react'
+import { Link } from 'react-router-dom'
 import { Activity } from 'lucide-react'
+import { useAuth } from '../context/AuthContext'
 import { register } from '../api'
 
 export default function Register() {
-  const navigate = useNavigate()
+  const { login } = useAuth()
+  const [username, setUsername] = useState('')
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [confirm, setConfirm] = useState('')
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
 
-  const handleSubmit = async (e: FormEvent) => {
+  const handleSubmit = useCallback(async (e: FormEvent) => {
     e.preventDefault()
     setError('')
 
@@ -22,11 +24,10 @@ export default function Register() {
 
     setLoading(true)
     try {
-      const data = await register(email, password)
-      localStorage.setItem('tt_token', data.token)
-      navigate('/', { replace: true })
-      // force page reload so AuthContext picks up the new token
-      window.location.href = '/'
+      await register(username, email, password)
+      // Після реєстрації одразу логінимось через AuthContext —
+      // це встановлює user і token без page reload
+      await login(email, password)
     } catch (err: unknown) {
       if (
         err &&
@@ -36,20 +37,19 @@ export default function Register() {
         typeof err.response === 'object' &&
         'data' in err.response
       ) {
-        const data = err.response.data as { message?: string; error?: string }
-        setError(data.message ?? data.error ?? 'Registration failed')
+        const data = err.response.data as { error?: string }
+        setError(data.error ?? 'Registration failed')
       } else {
         setError('Registration failed. Please try again.')
       }
     } finally {
       setLoading(false)
     }
-  }
+  }, [username, email, password, confirm, login])
 
   return (
     <div className="min-h-screen flex items-center justify-center bg-slate-900 px-4">
       <div className="w-full max-w-md">
-        {/* Logo */}
         <div className="flex items-center justify-center gap-2 mb-8">
           <Activity className="text-blue-500" size={32} />
           <span className="text-2xl font-bold text-white">TradeTracker</span>
@@ -65,6 +65,22 @@ export default function Register() {
           )}
 
           <form onSubmit={(e) => void handleSubmit(e)} className="space-y-4">
+            <div>
+              <label className="block text-sm font-medium text-slate-300 mb-1.5">
+                Username
+              </label>
+              <input
+                type="text"
+                value={username}
+                onChange={(e) => setUsername(e.target.value)}
+                required
+                minLength={3}
+                maxLength={50}
+                placeholder="yourname"
+                className="w-full px-3 py-2.5 bg-slate-700 border border-slate-600 rounded-lg text-white placeholder-slate-400 text-sm focus:outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500"
+              />
+            </div>
+
             <div>
               <label className="block text-sm font-medium text-slate-300 mb-1.5">
                 Email

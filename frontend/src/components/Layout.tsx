@@ -8,6 +8,7 @@ import {
   Grid3x3,
   TrendingUp,
   BarChart2,
+  Settings,
   LogOut,
   Menu,
   X,
@@ -25,6 +26,7 @@ const NAV_ITEMS = [
   { to: '/bots', label: 'Grid Bots', icon: Grid3x3 },
   { to: '/dca', label: 'DCA Bots', icon: TrendingUp },
   { to: '/analytics', label: 'Analytics', icon: BarChart2 },
+  { to: '/settings', label: 'Settings', icon: Settings },
 ]
 
 // ─── Sidebar ──────────────────────────────────────────────────────────────────
@@ -79,10 +81,16 @@ function Sidebar({ onClose }: SidebarProps) {
       {/* User footer */}
       <div className="px-4 py-4 border-t border-slate-700">
         <div className="flex items-center gap-3">
-          <div className="w-8 h-8 rounded-full bg-blue-600 flex items-center justify-center text-white text-xs font-bold flex-shrink-0">
-            {user?.email?.[0]?.toUpperCase() ?? '?'}
-          </div>
+          <NavLink
+            to="/settings"
+            onClick={onClose}
+            className="w-8 h-8 rounded-full bg-blue-600 flex items-center justify-center text-white text-xs font-bold flex-shrink-0 hover:bg-blue-500 transition-colors"
+            title="Profile settings"
+          >
+            {user?.username?.[0]?.toUpperCase() ?? '?'}
+          </NavLink>
           <div className="flex-1 min-w-0">
+            <p className="text-sm text-white font-medium truncate">{user?.username}</p>
             <p className="text-xs text-slate-400 truncate">{user?.email}</p>
           </div>
           <button
