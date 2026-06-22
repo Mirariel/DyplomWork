@@ -11,7 +11,7 @@
 його на повноцінний трейдинг-продукт рівня [Bitsgap](https://bitsgap.com) —
 мультибіржовий портфельний трекер з торговими ботами, smart orders та аналітикою.
 
-**Чому Go:** Криптотрейдинг — це latency-sensitive домен. PHP з синхронним виконанням
+**Чому Go:** Криптотрейдин — це latency-sensitive домен. PHP з синхронним виконанням
 не масштабується до сотень WebSocket-з'єднань і паралельних API-запитів до 10+ бірж.
 Go дає нам goroutines, канали, і compile-time safety без overhead JVM/Node.
 
@@ -38,6 +38,12 @@ Go дає нам goroutines, канали, і compile-time safety без overhea
 ### Фаза 13 — Grafana monitoring dashboard ✅ DONE
 ### Фаза 14 — Profile Settings сторінка + user API ✅ DONE
 ### Фаза 15 — Мікросервіси (api-gateway / market-data / trading / analytics + NATS) ✅ DONE
+### Фаза 16.1 — Futures Positions + Auto-Discovery ✅ DONE
+### Фаза 16.2 — Spot Trades History ✅ DONE
+### Фаза 16.3 — AI Advisor (Claude API) ✅ DONE
+### Фаза 16.4 — Portfolio Overhaul (Balances + recharts PriceChart) ✅ DONE
+### Фаза 16.5 — Dashboard redesign (Exchange Filter + Live Prices Grid + Top Symbols) ✅ DONE
+### Фаза 16.6 — Analytics Scheduler + PnL% formula fix ✅ DONE
 
 **Сервіси:**
 
@@ -54,7 +60,7 @@ Go дає нам goroutines, канали, і compile-time safety без overhea
 | MySQL | localhost:3306 | |
 | Redis | localhost:6379 | price cache |
 
-**БД:** `tradetracker_go` (MySQL), версія міграції: 7
+**БД:** `tradetracker_go` (MySQL), версія міграції: 9
 **Запуск:** `docker compose up --build -d` → 10 контейнерів
 
 ---
@@ -125,31 +131,38 @@ tradetracker-go/
 │   │   ├── bot.go              — Bot + BotGrid + BotRepository
 │   │   ├── snapshot.go         — PortfolioSnapshot + SnapshotRepository
 │   │   ├── dca_bot.go          — DCABot + DCABotRepository
+│   │   ├── futures_position.go — FuturesPosition + FuturesPositionRepository (Upsert/GetByUser/DeleteStale)
+│   │   ├── spot_trade.go       — SpotTrade + SpotTradeRepository (Upsert/GetByUser)
 │   │   └── *_test.go           — 33 інтеграційні тести
 │   ├── handlers/
 │   │   ├── auth.go             — Register/Login/Logout/Me/UpdateProfile/ChangePassword
-│   │   ├── portfolio.go        — CRUD credentials (label, api_key_hint), comments
-│   │   ├── sync.go             — full/positions/history/prices
+│   │   ├── portfolio.go        — CRUD credentials (label, api_key_hint), comments, SetCredentialHook
+│   │   ├── sync.go             — full/positions/history/prices + snapshot-on-sync
 │   │   ├── order.go            — PlaceOrder/Cancel/Get/List
 │   │   ├── smart_order.go      — Create/List/Get/Cancel
 │   │   ├── bot.go              — Create/List/Get/Start/Stop/Delete
 │   │   ├── analytics.go        — Summary/Coins/Snapshots/TakeSnapshot/Arbitrage
-│   │   └── dca.go              — Create/List/Get/Start/Stop/Delete
+│   │   ├── dca.go              — Create/List/Get/Start/Stop/Delete
+│   │   ├── futures.go          — GET /api/futures/positions
+│   │   ├── spot_trades.go      — GET /api/spot-trades
+│   │   └── ai.go               — POST /api/ai/ask (Claude claude-haiku-4-5)
 │   ├── services/
 │   │   ├── creds.go            — GetUserCreds() shared helper
 │   │   ├── encryption.go       — AES-256-GCM encrypt/decrypt
-│   │   ├── sync_service.go     — SyncUser/SyncAllUsers (паралельно per exchange)
-│   │   ├── sync_repository.go  — SQL для синку (upsert, cleanup)
-│   │   ├── price_service.go    — UpdateAllAssets() + GetLivePrices() через PriceStorer
+│   │   ├── sync_service.go     — SyncUser/SyncAllUsers + SyncSpotTrades + SyncFutures
+│   │   ├── sync_repository.go  — SQL для синку (upsert, cleanup, spot_trades, futures)
+│   │   ├── price_service.go    — UpdateAllAssets() + GetLivePrices() + GetLivePricesByExchange()
 │   │   ├── smart_order_service.go — CheckAndTrigger: SL/TP/Trailing
 │   │   ├── bot_service.go      — Start/Stop/CheckBots (10 s)
-│   │   ├── analytics_service.go — TakeSnapshot, TradeSummary, CoinPerf, Arbitrage
+│   │   ├── analytics_service.go — TakeAllSnapshots/TakeSnapshotForUser + TradeSummary + CoinPerf + Arbitrage
 │   │   ├── dca_service.go      — Start/Stop/CheckAndBuy (5 min)
+│   │   ├── top_symbols_service.go — TopSymbolsService (FetchTopSymbols via Binance 24h ticker, Redis TTL 1h)
 │   │   └── exchange/           — 6 бірж: Binance/OKX/Bybit/Gate/Kraken/KuCoin
-│   │       ├── interface.go + registry.go + client.go + helpers.go + parse.go + trader.go
-│   │       ├── binance.go + binance_trade.go
-│   │       ├── okx.go + okx_trade.go
-│   │       ├── bybit.go + bybit_trade.go
+│   │       ├── interface.go    — Exchange interface + Balance/Position(+MarginType)/ClosedTrade/SpotTrade + SpotTrader
+│   │       ├── registry.go + client.go + helpers.go + parse.go + trader.go
+│   │       ├── binance.go      — GetBalances/GetOpenPositions/GetClosedTrades/GetPrices/GetRecentTrades
+│   │       ├── okx.go          — GetBalances/GetOpenPositions/GetClosedTrades/GetPrices/GetRecentTrades
+│   │       ├── bybit.go        — GetBalances/GetOpenPositions/GetClosedTrades/GetPrices/GetRecentTrades
 │   │       ├── gate.go / kraken.go / kucoin.go
 │   │       ├── helpers_test.go — unit тести hmac/sha512/normalizeSymbol
 │   │       └── parse_test.go   — unit тести parseFloat/parseInt64
@@ -168,31 +181,39 @@ tradetracker-go/
 │   └── ws/
 │       ├── hub.go              — реєстр WS-з'єднань (sync.RWMutex)
 │       ├── client.go           — ReadPump + WritePump goroutines
-│       ├── server.go           — broadcast loop (2 s): positions + spot prices
+│       ├── server.go           — broadcast loop (2 s): positions + spotPrices + spotPricesByExchange + topSymbols; price-based PnL%
 │       ├── handler.go          — Fiber WS upgrade
 │       └── server_test.go      — unit тести roundFloat/formatLeverage
 │
-├── migrations/                 — SQL файли 000001–000007
+├── migrations/                 — SQL файли 000001–000009
 │   ├── 000001_initial_schema   — users, assets, portfolios, positions, history, credentials
 │   ├── 000002_orders           — orders table
 │   ├── 000003_smart_orders     — smart_orders table
 │   ├── 000004_bots             — bots + bot_grids tables
 │   ├── 000005_snapshots        — portfolio_snapshots table
 │   ├── 000006_dca_bots         — dca_bots table
-│   └── 000007_credentials_label — label + api_key_hint колонки в external_api_credentials
+│   ├── 000007_credentials_label — label + api_key_hint колонки в external_api_credentials
+│   ├── 000008_futures_positions — futures_positions table (DECIMAL(20,8), leverage INT, margin_type)
+│   └── 000009_spot_trades      — spot_trades table (buy/sell, fee, fee_asset, traded_at)
 │
 ├── frontend/
 │   ├── Dockerfile              — node:20-alpine → nginx:1.27-alpine
 │   ├── nginx.conf              — SPA routing, /api+/ws+/health proxy → api-gateway:8080, asset caching
 │   ├── vite.config.ts          — manualChunks: vendor-react/query/charts/icons/axios
 │   └── src/
-│       ├── App.tsx             — React.lazy (10 сторінок) + Suspense + route guards
-│       ├── api.ts              — 35+ типізованих API функцій; Credential: label, api_key_hint
-│       ├── ws.ts               — useWebSocket hook (auto-reconnect 3 s)
+│       ├── App.tsx             — React.lazy (12 сторінок) + Suspense + route guards
+│       ├── api.ts              — 45+ типізованих API функцій; SpotTrade, FuturesPosition, Snapshot
+│       ├── ws.ts               — useWebSocket hook (auto-reconnect 3 s); spotPricesByExchange + topSymbols
 │       ├── context/AuthContext.tsx — user/token/login/logout/updateUser (cancelled-flag cleanup)
-│       ├── components/Layout.tsx   — sidebar (8 nav items + Settings), user footer
+│       ├── components/
+│       │   ├── Layout.tsx      — sidebar (10 nav items: + Futures, + Spot Trades), user footer
+│       │   ├── PriceChart.tsx  — recharts AreaChart + Binance klines API (15m/1h/4h/1d intervals)
+│       │   ├── CoinModal.tsx   — live price modal з PriceChart + external TradingView link
+│       │   ├── AiAdvisor.tsx   — AI chat widget (POST /api/ai/ask, Claude Haiku)
+│       │   └── ExchangeSelector.tsx — dropdown з активних credentials
 │       └── pages/              — Login, Register, Dashboard, Portfolio, Orders,
-│                                  SmartOrders, GridBots, DCABots, Analytics, Settings
+│                                  SmartOrders, GridBots, DCABots, Analytics, Settings,
+│                                  FuturesPositions, SpotTrades (new)
 │
 ├── monitoring/
 │   ├── prometheus.yml          — 4 scrape targets (api-gateway, market-data, trading, analytics)
@@ -236,6 +257,11 @@ POST   /api/analytics/snapshot
 POST/GET/DELETE  /api/dca | /api/dca/:id
 POST             /api/dca/:id/start?buy_now=true | /stop
 
+GET    /api/futures/positions?exchange=binance
+GET    /api/spot-trades?exchange=binance&days=30
+
+POST   /api/ai/ask   { "question": "..." } → { "answer": "..." }
+
 GET    /ws   (WebSocket)
 ```
 
@@ -247,8 +273,10 @@ GET    /ws   (WebSocket)
 // Сервер кожні 2 с →
 {
   "type": "update",
-  "positions": [{ "symbol": "BTC", "pnl": 241.5, "pnl_pct": 1.85, ... }],
-  "spot_prices": { "BTC": 67420, "ETH": 3210 }
+  "positions": [{ "symbol": "BTC", "side": "LONG", "exchange": "binance", "pnl": 241.5, "pnl_pct": 1.85, ... }],
+  "spot_prices": { "BTC": 67420, "ETH": 3210 },
+  "spot_prices_by_exchange": { "binance": { "BTC": 67420 }, "okx": { "BTC": 67415 } },
+  "top_symbols": ["BTC", "ETH", "SOL", "BNB", "XRP", ...]
 }
 ```
 
@@ -277,12 +305,15 @@ GET    /ws   (WebSocket)
 
 ## З чого почати наступну сесію
 
-**Фази 0–15 завершені.** Проєкт повністю функціональний.
+**Фази 0–16.6 завершені.** Проєкт повністю функціональний.
+
+Найближчі пріоритети:
+- **Portfolio Value chart** — потребує 2+ snapshot-рядків у `portfolio_snapshots`; scheduler пише 1 раз/день, тому графік з'явиться природно через кілька днів
+- **Spot Trades сторінка** — `SpotTrades.tsx` реалізована, але `SyncSpotTrades` можна додатково протестувати з реальними ключами
 
 Можливі напрямки:
 - **E2E тести** — handlers через `net/http/httptest` або `testcontainers`
 - **Окрема БД на сервіс** — повна ізоляція (окремі MySQL схеми/інстанси)
-- **Service discovery** — замість хардкоду URL (Consul або env-based)
 - **gRPC** — замість HTTP proxy для внутрішньої комунікації між сервісами
 - **Stripe підписки** — Free / Pro / Enterprise tier
 
@@ -349,12 +380,79 @@ GET    /ws   (WebSocket)
 - [x] docker-compose.yml: 10 сервісів (db, redis, nats, migrate, 4×Go, frontend, prometheus, grafana)
 - [x] Prometheus: 4 scrape targets замість 1
 
-### Фаза 16 — Майбутнє
+### Фаза 16.1 — Futures Positions + Auto-Discovery ✅
+- [x] Міграція 000008 — таблиця `futures_positions` (DECIMAL(20,8), leverage INT, margin_type)
+- [x] `exchange.Position` — додано поле `MarginType`; Binance/OKX/Bybit заповнюють його
+- [x] `internal/models/futures_position.go` — `FuturesPosition` + `FuturesPositionRepository` (Upsert/GetByUser/DeleteStale)
+- [x] `SyncService.SyncFuturesForUser/SyncFuturesAllUsers` — паралельний синк в `futures_positions`
+- [x] `DeleteStale` — видаляє закриті позиції (не повернуті Exchange)
+- [x] `GET /api/futures/positions?exchange=binance` — handler + route в trading
+- [x] `api.All("/futures*", trProxy)` — проксі в api-gateway
+- [x] Auto-discovery: `PortfolioHandler.SetCredentialHook` → async goroutine після `AddCredential`
+- [x] Scheduler `futures-sync` (30 s) у trading service
+- [x] Frontend: `FuturesPositions.tsx` — таблиця + total PnL + рефреш
+- [x] `ExchangeSelector.tsx` — dropdown з активних credentials
+- [x] `api.ts` — `FuturesPosition`, `FuturesResponse`, `getFuturesPositions`
+- [x] `Layout.tsx` — nav item "Futures" з іконкою Layers
+- [x] `App.tsx` — lazy route `/futures`
+
+### Фаза 16.2 — Spot Trades History ✅
+- [x] Міграція 000009 — таблиця `spot_trades` (buy/sell, fee, fee_asset, traded_at ms, UNIQUE KEY)
+- [x] `exchange.SpotTrader` interface — `GetRecentTrades(creds, startMs, endMs) ([]SpotTrade, error)`
+- [x] `exchange.SpotTrade` type — Symbol/Side/Quantity/Price/Fee/FeeAsset/TradedAt
+- [x] Binance/OKX/Bybit реалізують `SpotTrader` (`var _ SpotTrader = (*Binance)(nil)`)
+- [x] `internal/models/spot_trade.go` — `SpotTrade` + `SpotTradeRepository` (Upsert/GetByUser)
+- [x] `SyncService.SyncSpotTrades` — type assertion `SpotTrader`, синк за N днів
+- [x] `GET /api/spot-trades?exchange=binance&days=30` — handler + route в trading
+- [x] `api.All("/spot-trades*", trProxy)` — проксі в api-gateway
+- [x] Frontend: `SpotTrades.tsx` — таблиця угод + exchange/days фільтри
+- [x] `api.ts` — `SpotTrade`, `getSpotTrades`
+- [x] `Layout.tsx` — nav item "Spot Trades"
+- [x] `App.tsx` — lazy route `/spot-trades`
+
+### Фаза 16.3 — AI Advisor ✅
+- [x] `internal/handlers/ai.go` — `POST /api/ai/ask` → Anthropic Claude claude-haiku-4-5 API
+- [x] System prompt з контекстом трейдинг-платформи; `question` → `answer`
+- [x] `ANTHROPIC_KEY` в config + docker-compose
+- [x] Frontend: `AiAdvisor.tsx` — collapsible chat widget (правий нижній кут)
+- [x] `api.ts` — `askAi(question)` → `{ answer: string }`
+- [x] `Layout.tsx` — AiAdvisor монтується глобально для всіх сторінок
+
+### Фаза 16.4 — Portfolio Overhaul ✅
+- [x] `Portfolio.tsx` — Balances + Positions + History tabs з exchange filter
+- [x] `DetailModal` — відкривається по кліку на актив: stats + PriceChart
+- [x] `PriceChart.tsx` — recharts AreaChart + Binance klines API (15m/1h/4h/1d) замість TradingView
+- [x] `CoinModal.tsx` — live price popup з PriceChart (замість TradingView embed)
+- [x] `PATCH /api/portfolio/assets/:id/price` — ручне оновлення avg_buy_price
+- [x] `api.ts` — `updateAssetPrice`, `Snapshot` type
+
+### Фаза 16.5 — Dashboard Redesign ✅
+- [x] Exchange filter (All / Binance / OKX / Bybit) — фільтрує assets, positions, prices
+- [x] Live Spot Prices grid — top 20 символів по 24h об'єму (TopSymbolsService + Redis)
+- [x] `TopSymbolsService` — Binance `/api/v3/ticker/24hr`, сортування по quoteVolume, Redis TTL 1h
+- [x] Coin search + `CoinModal` при кліку
+- [x] `ws.ts` — отримує `spot_prices_by_exchange` + `top_symbols` з WS
+- [x] WS `UpdateMessage` — додано `SpotPricesByExchange`, `TopSymbols`
+- [x] `market-data` scheduler: `top-symbols-refresh` кожну годину
+- [x] `GET /api/market/top-symbols` — HTTP fallback для TopSymbols
+
+### Фаза 16.6 — Analytics Scheduler + PnL% Fix ✅
+- [x] `analytics/main.go` — snapshot scheduler (1 h) + startup goroutine `TakeAllSnapshots`
+- [x] `SyncHandler.FullSync` — тригерить `TakeSnapshotForUser` після синку (async)
+- [x] `market-data/main.go` — `analyticsService` + snapshot-on-sync в `SyncHandler`
+- [x] WS `server.go` — PnL% формула виправлена: `(markPx−entryPx)/entryPx × lev × 100`
+  - Стара (невірна): `pnl / (entryPrice × qty / lev)` — ламається на inverse контрактах
+  - Нова (вірна): price-based, не залежить від розміру контракту
+- [x] `PriceService.GetLivePricesByExchange()` — ціни по біржах для WS broadcast
+
+### Фаза 17 — Майбутнє
 - [ ] E2E тести (httptest / testcontainers)
 - [ ] Окрема БД на сервіс (повна ізоляція)
 - [ ] gRPC замість HTTP proxy для внутрішньої комунікації
 - [ ] Service discovery (Consul або env-based)
 - [ ] Stripe підписки (Free / Pro / Enterprise)
+- [ ] `GetAvailableSymbols` + валідація ордерів по реальних парах
+- [ ] Portfolio Value chart (потребує 2+ днів snapshot даних)
 
 ---
 

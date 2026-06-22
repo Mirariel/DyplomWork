@@ -988,3 +988,84 @@ useEffect(() => {
 `frontend/src/api.ts` (Credential interface),
 `frontend/src/pages/Portfolio.tsx` (maskKey видалено → api_key_hint),
 `frontend/src/context/AuthContext.tsx` (skipNextMeCall → cancelled flag)
+
+---
+
+## P-032 — TradingView widget не рендериться в React SPA
+
+**Коли:** Реалізація price chart у Portfolio DetailModal та CoinModal.
+
+**Проблема:**
+TradingView Lightweight Charts або Advanced Chart widget завантажуються через `<script>` тег
+який ін'єктується динамічно в DOM через `useEffect`. Всередині цього скрипта виконується
+`document.currentScript` — але для **динамічно ін'єктованих** скриптів цей атрибут завжди `null`.
+В результаті widget не може визначити свій контейнер і не рендериться, без жодної помилки в консолі.
+
+```js
+// useEffect — inject script
+const script = document.createElement('script')
+script.src = 'https://s3.tradingview.com/tv.js'
+script.onload = () => new TradingView.widget({ container_id: 'tv-chart', ... })
+// ↑ widget внутрішньо робить: const me = document.currentScript → null → crash
+```
+
+**Рішення:**
+Відмовились від TradingView embed. Замінили на власний компонент `PriceChart.tsx` —
+`recharts` AreaChart + публічний Binance klines API:
+```
+GET https://api.binance.com/api/v3/klines?symbol=BTCUSDT&interval=1h&limit=100
+```
+- Не потребує ключів (публічний endpoint)
+- Зелений/червоний градієнт залежно від динаміки
+- Interval selector: 15m / 1h / 4h / 1d
+- Props: `symbol`, `height`, `showIntervalSelector`, `defaultInterval`
+
+**Урок:**
+TradingView widget не підходить для React SPA якщо використовується через динамічний `<script>`.
+`document.currentScript` = `null` для будь-якого скрипта, завантаженого після `DOMContentLoaded`.
+Альтернативи: `lightweight-charts` (npm пакет, не через `<script>`), або власний компонент на recharts.
+
+**Зачеплені файли:**
+`frontend/src/components/PriceChart.tsx` (новий),
+`frontend/src/components/CoinModal.tsx` (TVChart → PriceChart),
+`frontend/src/pages/Portfolio.tsx` (TradingViewChart → PriceChart в DetailModal)
+
+---
+
+## P-033 — PnL% формула невірна для inverse (coin-margined) контрактів
+
+**Коли:** WS broadcast розраховує live PnL% для відкритих ф'ючерсних позицій.
+
+**Проблема:**
+Початкова формула розрахунку PnL%:
+```go
+margin := p.EntryPrice * p.Quantity / float64(max(p.Leverage, 1))
+pnlPct = p.PnL / margin * 100
+```
+Вона правильна **тільки** для linear (USDT-M) контрактів, де `Quantity` — кількість базової монети.
+
+Для **inverse** (coin-margined) контрактів (наприклад BTCUSD на Bybit/OKX) `Quantity` — кількість
+**контрактів** (кожен = $100), а не BTC. Тому чисельник `p.PnL` (у BTC) і знаменник `entryPrice × qty`
+(у доларах × контракти = розмірність не збігається) дають повну нісенітницю.
+
+**Рішення:**
+Price-based формула — не залежить від розміру або валюти контракту:
+```go
+// PnL% = (markPrice − entryPrice) / entryPrice × leverage × 100
+priceChange := (p.MarkPrice - p.EntryPrice) / p.EntryPrice
+if strings.EqualFold(p.Side, "short") {
+    priceChange = -priceChange
+}
+lev := p.Leverage
+if lev < 1 { lev = 1 }
+pnlPct = priceChange * float64(lev) * 100
+```
+Ця формула правильна і для linear, і для inverse, і для spot (lev=1).
+
+**Урок:**
+Для розрахунку PnL% ніколи не використовувати `pnl / margin`, якщо `Quantity` може бути
+в контрактах (integers × номінал), а не в базовій монеті.
+Завжди використовувати price-based: `(mark − entry) / entry × lev`.
+
+**Зачеплені файли:**
+`internal/ws/server.go` (broadcastToUser → pnlPct calculation)
