@@ -66,9 +66,11 @@ func main() {
 	}
 
 	// Price cache (Redis) — shared with market-data which writes to it.
+	var redisClient *goredis.Client
 	var priceStore cache.PriceStorer
 	if cfg.RedisURL != "" {
-		priceStore = cache.NewRedisPriceStore(goredis.NewClient(&goredis.Options{Addr: cfg.RedisURL}))
+		redisClient = goredis.NewClient(&goredis.Options{Addr: cfg.RedisURL})
+		priceStore = cache.NewRedisPriceStore(redisClient)
 		logger.Info("price cache: Redis", "url", cfg.RedisURL)
 	} else {
 		priceStore = cache.NewMemoryPriceStore()
@@ -77,13 +79,14 @@ func main() {
 
 	userRepo     := models.NewUserRepository(db)
 	priceService := services.NewPriceService(db, priceStore, logger)
+	topSvc       := services.NewTopSymbolsService(redisClient, logger)
 
 	// ── Handlers served directly by the gateway ──────────────────────────────
 	authHandler := handlers.NewAuthHandler(userRepo, cfg.JWTSecret)
 
 	// ── WebSocket ─────────────────────────────────────────────────────────────
 	hub      := ws.NewHub()
-	wsServer := ws.NewServer(hub, db, enc, priceService, cfg.JWTSecret, logger)
+	wsServer := ws.NewServer(hub, db, enc, priceService, topSvc, cfg.JWTSecret, logger)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	go wsServer.Run(ctx)
@@ -182,6 +185,7 @@ func main() {
 
 	// Proxy: market-data
 	api.All("/sync/*", mdProxy)
+	api.Get("/market/top-symbols", mdProxy)
 
 	// Proxy: trading
 	api.All("/portfolio*",    trProxy)
@@ -191,9 +195,12 @@ func main() {
 	api.All("/smart-orders*", trProxy)
 	api.All("/bots*",         trProxy)
 	api.All("/dca*",          trProxy)
+	api.All("/futures*",      trProxy)
+	api.All("/spot-trades*",  trProxy)
 
 	// Proxy: analytics
 	api.All("/analytics*", anProxy)
+	api.All("/ai/*",       anProxy)
 
 	// ── WebSocket ─────────────────────────────────────────────────────────────
 	app.Use("/ws", func(c *fiber.Ctx) error {

@@ -7,6 +7,7 @@
 package main
 
 import (
+	"context"
 	"log/slog"
 	"os"
 	"os/signal"
@@ -24,6 +25,7 @@ import (
 	"github.com/okochadmytro/tradetracker/internal/metrics"
 	"github.com/okochadmytro/tradetracker/internal/middleware"
 	"github.com/okochadmytro/tradetracker/internal/models"
+	"github.com/okochadmytro/tradetracker/internal/scheduler"
 	"github.com/okochadmytro/tradetracker/internal/services"
 )
 
@@ -48,9 +50,27 @@ func main() {
 	}
 	defer db.Close()
 
-	snapshotRepo    := models.NewSnapshotRepository(db)
+	snapshotRepo     := models.NewSnapshotRepository(db)
 	analyticsService := services.NewAnalyticsService(db, snapshotRepo, logger)
 	analyticsHandler := handlers.NewAnalyticsHandler(analyticsService, snapshotRepo)
+	aiHandler        := handlers.NewAIHandler(db, cfg.AnthropicKey)
+
+	// ── Snapshot scheduler ────────────────────────────────────────────────────
+	// Записує snapshot вартості портфеля кожну годину.
+	// При першому запуску — одразу, без очікування першого тіку.
+	ctx, cancel := context.WithCancel(context.Background())
+	sched := scheduler.New(logger)
+	sched.Register(scheduler.Job{
+		Name:     "snapshots",
+		Interval: 1 * time.Hour,
+		Fn: func(c context.Context) {
+			analyticsService.TakeAllSnapshots(c)
+		},
+	})
+	sched.Start(ctx)
+
+	// Знімок одразу при старті (щоб графік відображав хоча б поточний стан)
+	go analyticsService.TakeAllSnapshots(ctx)
 
 	// ── Fiber app ─────────────────────────────────────────────────────────────
 	app := fiber.New(fiber.Config{
@@ -74,6 +94,8 @@ func main() {
 	analyticsGroup.Post("/snapshot", analyticsHandler.TakeSnapshot)
 	analyticsGroup.Get("/arbitrage", analyticsHandler.Arbitrage)
 
+	api.Post("/ai/ask", aiHandler.Ask)
+
 	app.Get("/health", func(c *fiber.Ctx) error {
 		return c.JSON(fiber.Map{"status": "ok", "service": "analytics"})
 	})
@@ -92,6 +114,7 @@ func main() {
 
 	<-quit
 	logger.Info("analytics shutting down")
+	cancel()
 	if err := app.ShutdownWithTimeout(5 * time.Second); err != nil {
 		logger.Error("shutdown error", "error", err)
 	}

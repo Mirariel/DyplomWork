@@ -71,12 +71,14 @@ func main() {
 	}
 
 	// Repositories
-	portfolioRepo  := models.NewPortfolioRepository(db)
-	orderRepo      := models.NewOrderRepository(db)
-	smartOrderRepo := models.NewSmartOrderRepository(db)
-	botRepo        := models.NewBotRepository(db)
-	snapshotRepo   := models.NewSnapshotRepository(db)
-	dcaBotRepo     := models.NewDCABotRepository(db)
+	portfolioRepo    := models.NewPortfolioRepository(db)
+	orderRepo        := models.NewOrderRepository(db)
+	smartOrderRepo   := models.NewSmartOrderRepository(db)
+	botRepo          := models.NewBotRepository(db)
+	snapshotRepo     := models.NewSnapshotRepository(db)
+	dcaBotRepo       := models.NewDCABotRepository(db)
+	futuresRepo      := models.NewFuturesPositionRepository(db)
+	spotTradeRepo    := models.NewSpotTradeRepository(db)
 
 	notifier    := notify.New(cfg.TelegramToken, cfg.TelegramChatID, logger)
 	priceService := services.NewPriceService(db, priceStore, logger)
@@ -86,12 +88,21 @@ func main() {
 	analyticsService  := services.NewAnalyticsService(db, snapshotRepo, logger)
 	dcaService        := services.NewDCAService(dcaBotRepo, portfolioRepo, priceService, enc, notifier, logger)
 
+	syncService := services.NewSyncService(db, enc, logger)
+
 	// Handlers
 	portfolioHandler  := handlers.NewPortfolioHandler(portfolioRepo, enc)
+	portfolioHandler.SetCredentialHook(func(userID int64) {
+		if err := syncService.SyncFuturesForUser(userID); err != nil {
+			logger.Error("auto-discovery: futures sync failed", "user_id", userID, "error", err)
+		}
+	})
 	orderHandler      := handlers.NewOrderHandler(orderRepo, portfolioRepo, enc, logger)
 	smartOrderHandler := handlers.NewSmartOrderHandler(smartOrderRepo)
 	botHandler        := handlers.NewBotHandler(botRepo, botService, priceService)
 	dcaHandler        := handlers.NewDCAHandler(dcaBotRepo, dcaService)
+	futuresHandler    := handlers.NewFuturesHandler(futuresRepo)
+	spotTradesHandler := handlers.NewSpotTradesHandler(spotTradeRepo)
 
 	// ── NATS: subscribe to price updates → trigger smart-order checks ─────────
 	bus, err := natspkg.Connect(cfg.NatsURL, logger)
@@ -114,6 +125,13 @@ func main() {
 	})
 
 	sched.Register(
+		scheduler.Job{
+			Name:     "futures-sync",
+			Interval: 30 * time.Second,
+			Fn: func(ctx context.Context) {
+				syncService.SyncFuturesAllUsers()
+			},
+		},
 		scheduler.Job{
 			Name:     "grid-bots",
 			Interval: 10 * time.Second,
@@ -186,8 +204,9 @@ func main() {
 	portfolio.Post("/credentials", portfolioHandler.AddCredential)
 	portfolio.Delete("/credentials/:id", portfolioHandler.DeleteCredential)
 
-	api.Patch("/positions/:id/comment", portfolioHandler.UpdatePositionComment)
-	api.Patch("/history/:id/comment",   portfolioHandler.UpdateHistoryComment)
+	api.Patch("/positions/:id/comment",         portfolioHandler.UpdatePositionComment)
+	api.Patch("/history/:id/comment",           portfolioHandler.UpdateHistoryComment)
+	api.Patch("/portfolio/assets/:id/price",    portfolioHandler.UpdateAssetPrice)
 
 	// Orders
 	api.Post("/orders",      orderHandler.PlaceOrder)
@@ -216,6 +235,12 @@ func main() {
 	api.Post("/dca/:id/start", dcaHandler.Start)
 	api.Post("/dca/:id/stop",  dcaHandler.Stop)
 	api.Delete("/dca/:id",     dcaHandler.Delete)
+
+	// Futures Positions
+	api.Get("/futures/positions", futuresHandler.GetPositions)
+
+	// Spot Trades
+	api.Get("/spot-trades", spotTradesHandler.GetTrades)
 
 	app.Get("/health", func(c *fiber.Ctx) error {
 		return c.JSON(fiber.Map{"status": "ok", "service": "trading"})

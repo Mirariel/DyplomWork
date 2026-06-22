@@ -61,18 +61,24 @@ func main() {
 		os.Exit(1)
 	}
 
+	var redisClient *goredis.Client
 	var priceStore cache.PriceStorer
 	if cfg.RedisURL != "" {
-		priceStore = cache.NewRedisPriceStore(goredis.NewClient(&goredis.Options{Addr: cfg.RedisURL}))
+		redisClient = goredis.NewClient(&goredis.Options{Addr: cfg.RedisURL})
+		priceStore = cache.NewRedisPriceStore(redisClient)
 		logger.Info("price cache: Redis", "url", cfg.RedisURL)
 	} else {
 		priceStore = cache.NewMemoryPriceStore()
 		logger.Info("price cache: in-memory (prices won't reach api-gateway WS without Redis)")
 	}
 
-	portfolioRepo := models.NewPortfolioRepository(db)
-	syncService   := services.NewSyncService(db, enc, logger)
-	priceService  := services.NewPriceService(db, priceStore, logger)
+	topSvc := services.NewTopSymbolsService(redisClient, logger)
+
+	portfolioRepo    := models.NewPortfolioRepository(db)
+	syncService      := services.NewSyncService(db, enc, logger)
+	priceService     := services.NewPriceService(db, priceStore, logger)
+	snapshotRepo     := models.NewSnapshotRepository(db)
+	analyticsService := services.NewAnalyticsService(db, snapshotRepo, logger)
 
 	// NATS — publish price updates so trading can trigger smart-order checks
 	bus, err := natspkg.Connect(cfg.NatsURL, logger)
@@ -83,7 +89,10 @@ func main() {
 	defer bus.Close()
 
 	// ── Handlers ──────────────────────────────────────────────────────────────
-	syncHandler := handlers.NewSyncHandler(syncService, priceService, portfolioRepo)
+	syncHandler := handlers.NewSyncHandler(syncService, priceService, portfolioRepo, analyticsService)
+
+	// Підтягнути топ символи одразу при старті (не чекати першу годину)
+	go topSvc.FetchTopSymbols()
 
 	// ── Scheduler ─────────────────────────────────────────────────────────────
 	sched := scheduler.New(logger)
@@ -113,6 +122,13 @@ func main() {
 				syncService.SyncAllUsers()
 			},
 		},
+		scheduler.Job{
+			Name:     "top-symbols-refresh",
+			Interval: 1 * time.Hour,
+			Fn: func(_ context.Context) {
+				topSvc.FetchTopSymbols()
+			},
+		},
 	)
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -138,6 +154,15 @@ func main() {
 	syncGroup.Post("/positions", syncHandler.SyncPositions)
 	syncGroup.Post("/history",   syncHandler.SyncHistory)
 	syncGroup.Get("/prices",     syncHandler.UpdatePrices)
+
+	// Топ символи по 24h об'єму (публічні ринкові дані)
+	api.Get("/market/top-symbols", func(c *fiber.Ctx) error {
+		symbols := topSvc.GetTopSymbols()
+		if symbols == nil {
+			symbols = []string{}
+		}
+		return c.JSON(symbols)
+	})
 
 	app.Get("/health", func(c *fiber.Ctx) error {
 		return c.JSON(fiber.Map{"status": "ok", "service": "market-data"})
