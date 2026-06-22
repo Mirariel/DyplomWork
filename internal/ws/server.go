@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"math"
+	"strings"
 	"sync"
 	"time"
 
@@ -14,11 +15,18 @@ import (
 	"github.com/okochadmytro/tradetracker/internal/services/exchange"
 )
 
+// TopSymbolsGetter надає список топ символів (by volume) для пріоритизації в WS broadcast.
+type TopSymbolsGetter interface {
+	GetTopSymbols() []string
+}
+
 // UpdateMessage — повідомлення, яке сервер відправляє клієнту кожні 2с
 type UpdateMessage struct {
-	Type       string                 `json:"type"`
-	Positions  []LivePosition         `json:"positions"`
-	SpotPrices map[string]float64     `json:"spot_prices"`
+	Type                 string                        `json:"type"`
+	Positions            []LivePosition                `json:"positions"`
+	SpotPrices           map[string]float64            `json:"spot_prices"`
+	SpotPricesByExchange map[string]map[string]float64 `json:"spot_prices_by_exchange"`
+	TopSymbols           []string                      `json:"top_symbols"`
 }
 
 // LivePosition — відкрита позиція з live PnL%
@@ -45,6 +53,7 @@ type Server struct {
 	db         *sqlx.DB
 	encryption *services.EncryptionService
 	prices     *services.PriceService
+	topSymbols TopSymbolsGetter // опціонально; nil → top_symbols буде порожнім
 	exchanges  map[string]exchange.Exchange
 	jwtSecret  string
 	logger     *slog.Logger
@@ -55,6 +64,7 @@ func NewServer(
 	db *sqlx.DB,
 	enc *services.EncryptionService,
 	prices *services.PriceService,
+	topSymbols TopSymbolsGetter,
 	jwtSecret string,
 	logger *slog.Logger,
 ) *Server {
@@ -63,6 +73,7 @@ func NewServer(
 		db:         db,
 		encryption: enc,
 		prices:     prices,
+		topSymbols: topSymbols,
 		exchanges:  exchange.Registry(),
 		jwtSecret:  jwtSecret,
 		logger:     logger,
@@ -88,14 +99,29 @@ func (s *Server) Run(ctx context.Context) {
 				continue
 			}
 
-			spotPrices := s.prices.GetLivePrices(nil)
+			spotPricesByExchange := s.prices.GetLivePricesByExchange()
+			// Merge all exchange prices into a flat map (first-wins per symbol)
+			spotPrices := make(map[string]float64)
+			for _, prices := range spotPricesByExchange {
+				for sym, price := range prices {
+					if _, exists := spotPrices[sym]; !exists {
+						spotPrices[sym] = price
+					}
+				}
+			}
+
+			// Топ символи по об'єму (однакові для всіх користувачів)
+			var topSymbols []string
+			if s.topSymbols != nil {
+				topSymbols = s.topSymbols.GetTopSymbols()
+			}
 
 			var wg sync.WaitGroup
 			for userID, clients := range users {
 				wg.Add(1)
 				go func(userID int64, clients []*Client) {
 					defer wg.Done()
-					s.broadcastToUser(userID, spotPrices)
+					s.broadcastToUser(userID, spotPrices, spotPricesByExchange, topSymbols)
 				}(userID, clients)
 			}
 			wg.Wait()
@@ -103,7 +129,7 @@ func (s *Server) Run(ctx context.Context) {
 	}
 }
 
-func (s *Server) broadcastToUser(userID int64, spotPrices map[string]float64) {
+func (s *Server) broadcastToUser(userID int64, spotPrices map[string]float64, spotPricesByExchange map[string]map[string]float64, topSymbols []string) {
 	creds, err := s.getUserCredentials(userID)
 	if err != nil || len(creds) == 0 {
 		return
@@ -136,12 +162,20 @@ func (s *Server) broadcastToUser(userID int64, spotPrices map[string]float64) {
 
 			var live []LivePosition
 			for _, p := range rawPositions {
+				// PnL% = (markPrice - entryPrice) / entryPrice × leverage
+				// Формула через ціни не залежить від розміру контракту (contracts vs units),
+				// тому коректна і для linear (USDT-M), і для inverse (coin-margined) позицій.
 				pnlPct := 0.0
-				if p.PnL != 0 && p.EntryPrice > 0 && p.Quantity > 0 {
-					margin := p.EntryPrice * p.Quantity / float64(max(p.Leverage, 1))
-					if margin > 0 {
-						pnlPct = p.PnL / margin * 100
+				if p.EntryPrice > 0 && p.MarkPrice > 0 {
+					priceChange := (p.MarkPrice - p.EntryPrice) / p.EntryPrice
+					if strings.EqualFold(p.Side, "short") || strings.EqualFold(p.Side, "sell") {
+						priceChange = -priceChange
 					}
+					lev := p.Leverage
+					if lev < 1 {
+						lev = 1
+					}
+					pnlPct = priceChange * float64(lev) * 100
 				}
 				live = append(live, LivePosition{
 					Symbol:     p.Symbol,
@@ -168,9 +202,11 @@ func (s *Server) broadcastToUser(userID int64, spotPrices map[string]float64) {
 	}
 
 	msg := UpdateMessage{
-		Type:       "update",
-		Positions:  allPositions,
-		SpotPrices: spotPrices,
+		Type:                 "update",
+		Positions:            allPositions,
+		SpotPrices:           spotPrices,
+		SpotPricesByExchange: spotPricesByExchange,
+		TopSymbols:           topSymbols,
 	}
 	data, err := json.Marshal(msg)
 	if err != nil {
