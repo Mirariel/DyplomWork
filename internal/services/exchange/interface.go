@@ -21,12 +21,13 @@ type Balance struct {
 // Position — відкрита ф'ючерсна/маржинальна позиція
 type Position struct {
 	Symbol     string
-	Side       string  // "long" | "short"
+	Side       string  // "LONG" | "SHORT"
 	Quantity   float64
 	EntryPrice float64
 	MarkPrice  float64
 	Leverage   int
 	PnL        float64
+	MarginType string  // "cross" | "isolated"
 }
 
 // ClosedTrade — закрита угода з PnL
@@ -38,6 +39,24 @@ type ClosedTrade struct {
 	ClosePrice float64
 	PnL        float64
 	ClosedAt   int64 // Unix timestamp ms
+}
+
+// SpotTrade — одна спот-угода (buy/sell)
+type SpotTrade struct {
+	Symbol    string
+	Side      string  // "buy" | "sell"
+	Quantity  float64
+	Price     float64
+	Fee       float64
+	FeeAsset  string
+	TradedAt  int64 // Unix timestamp ms
+}
+
+// SpotTrader — опціональний інтерфейс для отримання спот-угод.
+// Перевіряти через type assertion: if st, ok := ex.(exchange.SpotTrader); ok { ... }
+// Реалізовано: Binance, OKX, Bybit.
+type SpotTrader interface {
+	GetRecentTrades(creds Credentials, startMs, endMs int64) ([]SpotTrade, error)
 }
 
 // Exchange — інтерфейс, який мають реалізувати всі адаптери бірж

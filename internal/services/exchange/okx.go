@@ -77,16 +77,20 @@ func (o *OKX) GetBalances(creds Credentials) ([]Balance, error) {
 			} `json:"details"`
 		} `json:"data"`
 	}
-	if err := o.get("/api/v5/account/balance", nil, creds, &tradingResp); err == nil && tradingResp.Code == "0" {
-		for _, d := range tradingResp.Data {
-			for _, a := range d.Details {
-				v := parseFloat(a.Eq)
-				if v == 0 {
-					v = parseFloat(a.Bal)
-				}
-				if v > 0 {
-					totals[a.Ccy] += v
-				}
+	if err := o.get("/api/v5/account/balance", nil, creds, &tradingResp); err != nil {
+		return nil, fmt.Errorf("okx: %w", err)
+	}
+	if tradingResp.Code != "0" {
+		return nil, fmt.Errorf("okx: account/balance code %s", tradingResp.Code)
+	}
+	for _, d := range tradingResp.Data {
+		for _, a := range d.Details {
+			v := parseFloat(a.Eq)
+			if v == 0 {
+				v = parseFloat(a.Bal)
+			}
+			if v > 0 {
+				totals[a.Ccy] += v
 			}
 		}
 	}
@@ -198,6 +202,10 @@ func (o *OKX) GetOpenPositions(creds Credentials) ([]Position, error) {
 				side = "SHORT"
 			}
 		}
+		marginType := strings.ToLower(p.MgnMode)
+		if marginType == "" {
+			marginType = "cross"
+		}
 		result = append(result, Position{
 			Symbol:     normalizeSymbol(p.InstId),
 			Side:       side,
@@ -206,6 +214,7 @@ func (o *OKX) GetOpenPositions(creds Credentials) ([]Position, error) {
 			MarkPrice:  parseFloat(p.MarkPx),
 			Leverage:   int(parseFloat(p.Lever)),
 			PnL:        parseFloat(p.Upl),
+			MarginType: marginType,
 		})
 	}
 	return result, nil
@@ -291,4 +300,54 @@ func (o *OKX) GetPrices(symbols []string) (map[string]float64, error) {
 		}
 	}
 	return prices, nil
+}
+
+// Compile-time перевірка що OKX реалізує SpotTrader
+var _ SpotTrader = (*OKX)(nil)
+
+// GetRecentTrades повертає спот-угоди OKX (/api/v5/trade/fills).
+func (o *OKX) GetRecentTrades(creds Credentials, startMs, endMs int64) ([]SpotTrade, error) {
+	var resp struct {
+		Code string `json:"code"`
+		Data []struct {
+			InstId  string `json:"instId"`
+			Side    string `json:"side"`
+			FillSz  string `json:"fillSz"`
+			FillPx  string `json:"fillPx"`
+			Fee     string `json:"fee"`
+			FeeCcy  string `json:"feeCcy"`
+			Ts      string `json:"ts"`
+		} `json:"data"`
+	}
+
+	params := map[string]string{
+		"instType": "SPOT",
+		"begin":    fmt.Sprintf("%d", startMs),
+		"end":      fmt.Sprintf("%d", endMs),
+		"limit":    "100",
+	}
+	if err := o.get("/api/v5/trade/fills", params, creds, &resp); err != nil {
+		return nil, fmt.Errorf("okx spot trades: %w", err)
+	}
+	if resp.Code != "0" {
+		return nil, fmt.Errorf("okx spot trades API code %s", resp.Code)
+	}
+
+	var result []SpotTrade
+	for _, t := range resp.Data {
+		fee := parseFloat(t.Fee)
+		if fee < 0 {
+			fee = -fee
+		}
+		result = append(result, SpotTrade{
+			Symbol:   normalizeSymbol(t.InstId),
+			Side:     strings.ToLower(t.Side),
+			Quantity: parseFloat(t.FillSz),
+			Price:    parseFloat(t.FillPx),
+			Fee:      fee,
+			FeeAsset: t.FeeCcy,
+			TradedAt: parseInt64(t.Ts),
+		})
+	}
+	return result, nil
 }

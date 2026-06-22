@@ -3,6 +3,7 @@ package exchange
 import (
 	"fmt"
 	"math"
+	"strings"
 )
 
 const (
@@ -60,18 +61,18 @@ func (b *Binance) GetOpenPositions(creds Credentials) ([]Position, error) {
 	url := fmt.Sprintf("%s/fapi/v2/positionRisk?%s&signature=%s", binanceFuturesURL, query, sig)
 
 	var resp []struct {
-		Symbol          string `json:"symbol"`
-		PositionAmt     string `json:"positionAmt"`
-		EntryPrice      string `json:"entryPrice"`
-		MarkPrice       string `json:"markPrice"`
+		Symbol           string `json:"symbol"`
+		PositionAmt      string `json:"positionAmt"`
+		EntryPrice       string `json:"entryPrice"`
+		MarkPrice        string `json:"markPrice"`
 		UnRealizedProfit string `json:"unRealizedProfit"`
-		Leverage        string `json:"leverage"`
-		MarginType      string `json:"marginType"`
+		Leverage         string `json:"leverage"`
+		MarginType       string `json:"marginType"`
 		LiquidationPrice string `json:"liquidationPrice"`
-		IsolatedMargin  string `json:"isolatedMargin"`
-		Notional        string `json:"notional"`
-		Code            int    `json:"code"`
-		Msg             string `json:"msg"`
+		IsolatedMargin   string `json:"isolatedMargin"`
+		Notional         string `json:"notional"`
+		Code             int    `json:"code"`
+		Msg              string `json:"msg"`
 	}
 
 	if err := getJSON(url, map[string]string{"X-MBX-APIKEY": creds.APIKey}, &resp); err != nil {
@@ -89,6 +90,10 @@ func (b *Binance) GetOpenPositions(creds Credentials) ([]Position, error) {
 		if qty < 0 {
 			side = "SHORT"
 		}
+		marginType := strings.ToLower(p.MarginType)
+		if marginType == "" {
+			marginType = "cross"
+		}
 		result = append(result, Position{
 			Symbol:     normalizeSymbol(p.Symbol),
 			Side:       side,
@@ -97,6 +102,7 @@ func (b *Binance) GetOpenPositions(creds Credentials) ([]Position, error) {
 			MarkPrice:  parseFloat(p.MarkPrice),
 			Leverage:   int(parseFloat(p.Leverage)),
 			PnL:        parseFloat(p.UnRealizedProfit),
+			MarginType: marginType,
 		})
 	}
 	return result, nil
@@ -156,7 +162,70 @@ func (b *Binance) GetPrices(symbols []string) (map[string]float64, error) {
 
 	prices := make(map[string]float64, len(resp))
 	for _, t := range resp {
-		prices[t.Symbol] = parseFloat(t.Price)
+		if strings.HasSuffix(t.Symbol, "USDT") {
+			price := parseFloat(t.Price)
+			prices[t.Symbol] = price
+			prices[strings.TrimSuffix(t.Symbol, "USDT")] = price
+		}
 	}
 	return prices, nil
+}
+
+// Compile-time перевірка що Binance реалізує SpotTrader
+var _ SpotTrader = (*Binance)(nil)
+
+// GetRecentTrades повертає спот-угоди Binance за діапазон часу.
+// Binance потребує symbol — тому запитуємо по ТОП монетах.
+func (b *Binance) GetRecentTrades(creds Credentials, startMs, endMs int64) ([]SpotTrade, error) {
+	// Binance /api/v3/myTrades потребує конкретний symbol.
+	// Отримуємо всі відомі символи через account balances і запитуємо для кожного.
+	balances, err := b.GetBalances(creds)
+	if err != nil {
+		return nil, err
+	}
+
+	var result []SpotTrade
+	for _, bal := range balances {
+		sym := strings.ToUpper(bal.Symbol) + "USDT"
+		ts := nowMs()
+		query := fmt.Sprintf("symbol=%s&startTime=%d&endTime=%d&limit=200&timestamp=%d",
+			sym, startMs, endMs, ts)
+		sig := hmacSHA256(creds.APISecret, query)
+		url := fmt.Sprintf("%s/api/v3/myTrades?%s&signature=%s", binanceSpotURL, query, sig)
+
+		var resp []struct {
+			Symbol          string `json:"symbol"`
+			Id              int64  `json:"id"`
+			IsBuyer         bool   `json:"isBuyer"`
+			Qty             string `json:"qty"`
+			Price           string `json:"price"`
+			Commission      string `json:"commission"`
+			CommissionAsset string `json:"commissionAsset"`
+			Time            int64  `json:"time"`
+			Code            int    `json:"code"`
+			Msg             string `json:"msg"`
+		}
+		if err := getJSON(url, map[string]string{"X-MBX-APIKEY": creds.APIKey}, &resp); err != nil {
+			continue
+		}
+		for _, t := range resp {
+			if t.Code != 0 {
+				continue
+			}
+			side := "sell"
+			if t.IsBuyer {
+				side = "buy"
+			}
+			result = append(result, SpotTrade{
+				Symbol:   normalizeSymbol(t.Symbol),
+				Side:     side,
+				Quantity: parseFloat(t.Qty),
+				Price:    parseFloat(t.Price),
+				Fee:      parseFloat(t.Commission),
+				FeeAsset: t.CommissionAsset,
+				TradedAt: t.Time,
+			})
+		}
+	}
+	return result, nil
 }

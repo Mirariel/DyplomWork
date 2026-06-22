@@ -5,6 +5,7 @@ import (
 	"math"
 	"net/url"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -149,6 +150,10 @@ func (by *Bybit) GetOpenPositions(creds Credentials) ([]Position, error) {
 			if p.Side == "Buy" {
 				side = "LONG"
 			}
+			marginType := "cross"
+			if p.TradeMode == 1 {
+				marginType = "isolated"
+			}
 			result = append(result, Position{
 				Symbol:     normalizeSymbol(p.Symbol),
 				Side:       side,
@@ -157,6 +162,7 @@ func (by *Bybit) GetOpenPositions(creds Credentials) ([]Position, error) {
 				MarkPrice:  parseFloat(p.MarkPrice),
 				Leverage:   int(parseFloat(p.Leverage)),
 				PnL:        parseFloat(p.UnrealisedPnl),
+				MarginType: marginType,
 			})
 		}
 	}
@@ -257,6 +263,78 @@ func (by *Bybit) GetClosedTrades(creds Credentials, startMs, endMs int64) ([]Clo
 	return result, nil
 }
 
+// Compile-time перевірка що Bybit реалізує SpotTrader
+var _ SpotTrader = (*Bybit)(nil)
+
+// GetRecentTrades повертає спот-угоди Bybit (/v5/execution/list category=spot).
+func (by *Bybit) GetRecentTrades(creds Credentials, startMs, endMs int64) ([]SpotTrade, error) {
+	var result []SpotTrade
+
+	for _, cat := range []string{"spot", "linear"} {
+		cursor := ""
+		for page := 0; page < 10; page++ {
+			params := map[string]string{
+				"category":  cat,
+				"limit":     "100",
+				"startTime": strconv.FormatInt(startMs, 10),
+				"endTime":   strconv.FormatInt(endMs, 10),
+			}
+			if cursor != "" {
+				params["cursor"] = cursor
+			}
+
+			var resp struct {
+				RetCode int    `json:"retCode"`
+				RetMsg  string `json:"retMsg"`
+				Result  struct {
+					List []struct {
+						Symbol      string `json:"symbol"`
+						Side        string `json:"side"`
+						ExecQty     string `json:"execQty"`
+						ExecPrice   string `json:"execPrice"`
+						ExecFee     string `json:"execFee"`
+						FeeCurrency string `json:"feeCurrency"`
+						ExecTime    string `json:"execTime"`
+					} `json:"list"`
+					NextPageCursor string `json:"nextPageCursor"`
+				} `json:"result"`
+			}
+
+			if err := by.signedGet("/v5/execution/list", params, creds, &resp); err != nil || resp.RetCode != 0 {
+				break
+			}
+
+			for _, t := range resp.Result.List {
+				fee := parseFloat(t.ExecFee)
+				if fee < 0 {
+					fee = -fee
+				}
+				ts, _ := strconv.ParseInt(t.ExecTime, 10, 64)
+				side := "sell"
+				if t.Side == "Buy" {
+					side = "buy"
+				}
+				result = append(result, SpotTrade{
+					Symbol:   normalizeSymbol(t.Symbol),
+					Side:     side,
+					Quantity: parseFloat(t.ExecQty),
+					Price:    parseFloat(t.ExecPrice),
+					Fee:      fee,
+					FeeAsset: t.FeeCurrency,
+					TradedAt: ts,
+				})
+			}
+
+			cursor = resp.Result.NextPageCursor
+			if cursor == "" || len(resp.Result.List) == 0 {
+				break
+			}
+			time.Sleep(100 * time.Millisecond)
+		}
+	}
+	return result, nil
+}
+
 // --- Prices ---
 
 func (by *Bybit) GetPrices(symbols []string) (map[string]float64, error) {
@@ -281,12 +359,12 @@ func (by *Bybit) GetPrices(symbols []string) (map[string]float64, error) {
 		}
 
 		for _, t := range resp.Result.List {
+			if !strings.HasSuffix(t.Symbol, "USDT") {
+				continue
+			}
 			price := parseFloat(t.LastPrice)
 			prices[t.Symbol] = price
-			base := normalizeSymbol(t.Symbol)
-			if base != t.Symbol {
-				prices[base] = price
-			}
+			prices[strings.TrimSuffix(t.Symbol, "USDT")] = price
 		}
 	}
 	return prices, nil

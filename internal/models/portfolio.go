@@ -118,6 +118,16 @@ func (r *PortfolioRepository) GetUserAssets(userID int64) ([]UserPortfolio, erro
 	return items, err
 }
 
+// UpdateAssetPrice оновлює середню ціну входу для активу.
+// ManuallySet = true забороняє перезапис при автосинку.
+func (r *PortfolioRepository) UpdateAssetPrice(id int64, userID int64, avgBuyPrice float64, manuallySet bool) error {
+	_, err := r.db.Exec(
+		`UPDATE user_portfolios SET avg_buy_price = ?, manually_set = ? WHERE id = ? AND user_id = ?`,
+		avgBuyPrice, manuallySet, id, userID,
+	)
+	return err
+}
+
 func (r *PortfolioRepository) GetOpenPositions(userID int64) ([]OpenPosition, error) {
 	items := make([]OpenPosition, 0)
 	err := r.db.Select(&items,
