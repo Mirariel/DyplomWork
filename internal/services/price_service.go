@@ -116,6 +116,28 @@ func (ps *PriceService) GetLivePrices(symbols []string) map[string]float64 {
 	return result
 }
 
+// GetLivePricesByExchange повертає ціни згруповані по біржах (без stables).
+// Використовується для WS broadcast з фільтрацією по біржі.
+func (ps *PriceService) GetLivePricesByExchange() map[string]map[string]float64 {
+	allPrices := ps.fetchAllPrices()
+	stables := map[string]bool{
+		"USDT": true, "USDC": true, "DAI": true, "FDUSD": true, "BUSD": true,
+	}
+	result := make(map[string]map[string]float64, len(allPrices))
+	for exName, prices := range allPrices {
+		filtered := make(map[string]float64)
+		for sym, price := range prices {
+			if price > 0 && !stables[sym] {
+				filtered[sym] = price
+			}
+		}
+		if len(filtered) > 0 {
+			result[exName] = filtered
+		}
+	}
+	return result
+}
+
 // fetchAllPrices — паралельно отримує ціни з усіх бірж через cache.PriceStorer.
 // Повертає map[exchangeName]map[symbol]price.
 func (ps *PriceService) fetchAllPrices() map[string]map[string]float64 {

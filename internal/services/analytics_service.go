@@ -109,8 +109,10 @@ type TradeSummary struct {
 	ProfitFactor     float64 `json:"profit_factor"` // gross_profit / abs(gross_loss)
 }
 
-// GetTradeSummary повертає статистику по всіх закритих угодах.
-func (s *AnalyticsService) GetTradeSummary(userID int64) (TradeSummary, error) {
+// GetTradeSummary повертає статистику по закритих угодах.
+// days=0 означає all time; days>0 — фільтр за останні N днів.
+// exchange="" — всі біржі; exchange="binance" — тільки вказана.
+func (s *AnalyticsService) GetTradeSummary(userID int64, days int, exchange string) (TradeSummary, error) {
 	type row struct {
 		TotalTrades      int     `db:"total_trades"`
 		WinningTrades    int     `db:"winning_trades"`
@@ -124,20 +126,30 @@ func (s *AnalyticsService) GetTradeSummary(userID int64) (TradeSummary, error) {
 		GrossLoss        float64 `db:"gross_loss"`
 	}
 	var r row
+	filters := ""
+	args := []interface{}{userID}
+	if days > 0 {
+		filters += " AND closed_at >= DATE_SUB(NOW(), INTERVAL ? DAY)"
+		args = append(args, days)
+	}
+	if exchange != "" {
+		filters += " AND exchange = ?"
+		args = append(args, exchange)
+	}
 	err := s.db.Get(&r, `
 		SELECT
-		    COUNT(*)                                                      AS total_trades,
+		    COUNT(*)                                                        AS total_trades,
 		    COALESCE(SUM(CASE WHEN realized_pnl > 0 THEN 1 ELSE 0 END), 0) AS winning_trades,
-		    COALESCE(SUM(realized_pnl), 0)                   AS total_realized_pnl,
-		    COALESCE(AVG(realized_pnl), 0)                   AS avg_pnl,
-		    COALESCE(MAX(realized_pnl), 0)                   AS best_trade,
-		    COALESCE(MIN(realized_pnl), 0)                   AS worst_trade,
+		    COALESCE(SUM(realized_pnl), 0)                                 AS total_realized_pnl,
+		    COALESCE(AVG(realized_pnl), 0)                                 AS avg_pnl,
+		    COALESCE(MAX(realized_pnl), 0)                                 AS best_trade,
+		    COALESCE(MIN(realized_pnl), 0)                                 AS worst_trade,
 		    COALESCE(AVG(CASE WHEN realized_pnl > 0 THEN realized_pnl END), 0) AS avg_win,
 		    COALESCE(AVG(CASE WHEN realized_pnl < 0 THEN realized_pnl END), 0) AS avg_loss,
 		    COALESCE(SUM(CASE WHEN realized_pnl > 0 THEN realized_pnl ELSE 0 END), 0) AS gross_profit,
 		    COALESCE(SUM(CASE WHEN realized_pnl < 0 THEN realized_pnl ELSE 0 END), 0) AS gross_loss
 		FROM position_history
-		WHERE user_id = ?`, userID,
+		WHERE user_id = ?`+filters, args...,
 	)
 	if err != nil {
 		return TradeSummary{}, err

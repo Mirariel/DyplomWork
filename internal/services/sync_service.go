@@ -15,20 +15,24 @@ import (
 // SyncService — паралельна синхронізація портфелю з кількома біржами.
 // Кожна біржа синкується у своїй goroutine.
 type SyncService struct {
-	db         *sqlx.DB
-	encryption *EncryptionService
-	exchanges  map[string]exchange.Exchange
-	repo       *syncRepository
-	logger     *slog.Logger
+	db            *sqlx.DB
+	encryption    *EncryptionService
+	exchanges     map[string]exchange.Exchange
+	repo          *syncRepository
+	futuresRepo   *models.FuturesPositionRepository
+	spotTradeRepo *models.SpotTradeRepository
+	logger        *slog.Logger
 }
 
 func NewSyncService(db *sqlx.DB, enc *EncryptionService, logger *slog.Logger) *SyncService {
 	return &SyncService{
-		db:         db,
-		encryption: enc,
-		exchanges:  exchange.Registry(),
-		repo:       newSyncRepository(db),
-		logger:     logger,
+		db:            db,
+		encryption:    enc,
+		exchanges:     exchange.Registry(),
+		repo:          newSyncRepository(db),
+		futuresRepo:   models.NewFuturesPositionRepository(db),
+		spotTradeRepo: models.NewSpotTradeRepository(db),
+		logger:        logger,
 	}
 }
 
@@ -197,6 +201,91 @@ func (s *SyncService) SyncRecentHistory(userID int64, days int) error {
 	return nil
 }
 
+// SyncFuturesForUser синхронізує ф'ючерсні позиції одного користувача з усіх бірж.
+// Викликається після додавання credentials (auto-discovery) або за розкладом.
+func (s *SyncService) SyncFuturesForUser(userID int64) error {
+	creds, err := s.getCredentials(userID)
+	if err != nil || len(creds) == 0 {
+		return err
+	}
+
+	var wg sync.WaitGroup
+	for _, c := range creds {
+		wg.Add(1)
+		go func(c credWithKeys) {
+			defer wg.Done()
+			s.syncFuturesExchange(userID, c)
+		}(c)
+	}
+	wg.Wait()
+	return nil
+}
+
+// SyncFuturesAllUsers синхронізує ф'ючерсні позиції всіх активних користувачів.
+// Використовується фоновим scheduler'ом (30 s).
+func (s *SyncService) SyncFuturesAllUsers() {
+	var userIDs []int64
+	if err := s.db.Select(&userIDs,
+		"SELECT DISTINCT user_id FROM external_api_credentials WHERE is_active = 1",
+	); err != nil {
+		s.logger.Error("futures sync: get users", "error", err)
+		return
+	}
+	for _, id := range userIDs {
+		if err := s.SyncFuturesForUser(id); err != nil {
+			s.logger.Error("futures sync: user failed", "user_id", id, "error", err)
+		}
+	}
+}
+
+func (s *SyncService) syncFuturesExchange(userID int64, c credWithKeys) {
+	ex := s.getExchange(c.cred.Exchange)
+	if ex == nil {
+		return
+	}
+
+	syncStart := time.Now()
+
+	positions, err := ex.GetOpenPositions(c.creds)
+	if err != nil {
+		s.logger.Error("futures sync: get positions", "exchange", c.cred.Exchange, "error", err)
+		return
+	}
+
+	for _, p := range positions {
+		side := strings.ToUpper(p.Side)
+		if side != "LONG" && side != "SHORT" {
+			side = "LONG"
+		}
+		marginType := p.MarginType
+		if marginType == "" {
+			marginType = "cross"
+		}
+		fp := &models.FuturesPosition{
+			UserID:        userID,
+			Exchange:      c.cred.Exchange,
+			Symbol:        p.Symbol,
+			Side:          side,
+			Size:          p.Quantity,
+			EntryPrice:    p.EntryPrice,
+			MarkPrice:     p.MarkPrice,
+			UnrealizedPnl: p.PnL,
+			Leverage:      p.Leverage,
+			MarginType:    marginType,
+		}
+		if err := s.futuresRepo.Upsert(fp); err != nil {
+			s.logger.Error("futures sync: upsert", "symbol", p.Symbol, "error", err)
+		}
+	}
+
+	// Видаляємо позиції, що зникли з біржі (закриті)
+	if err := s.futuresRepo.DeleteStale(userID, c.cred.Exchange, syncStart); err != nil {
+		s.logger.Error("futures sync: delete stale", "exchange", c.cred.Exchange, "error", err)
+	}
+
+	s.logger.Info("futures sync: done", "exchange", c.cred.Exchange, "positions", len(positions))
+}
+
 // --- internal ---
 
 func (s *SyncService) syncExchangeFull(userID int64, c credWithKeys) error {
@@ -209,22 +298,35 @@ func (s *SyncService) syncExchangeFull(userID int64, c credWithKeys) error {
 	startMs := now.Add(-90 * 24 * time.Hour).UnixMilli()
 
 	// Всі 4 операції послідовно в межах одного exchange (API rate limits)
-	if balances, err := ex.GetBalances(c.creds); err == nil {
-		s.processBalances(userID, balances, c.cred.Exchange)
-	} else {
-		s.logger.Error("sync: balances error", "exchange", c.cred.Exchange, "error", err)
+	balances, err := ex.GetBalances(c.creds)
+	if err != nil {
+		s.logger.Error("sync: balances error", "user_id", userID, "exchange", c.cred.Exchange, "operation", "balances", "error", err)
+		return err
 	}
+	s.processBalances(userID, balances, c.cred.Exchange)
+	s.logger.Info("sync: balances ok", "user_id", userID, "exchange", c.cred.Exchange, "count", len(balances))
 
 	if positions, err := ex.GetOpenPositions(c.creds); err == nil {
 		s.processPositions(userID, positions, c.cred.Exchange)
+		s.logger.Info("sync: positions ok", "user_id", userID, "exchange", c.cred.Exchange, "count", len(positions))
 	} else {
-		s.logger.Error("sync: positions error", "exchange", c.cred.Exchange, "error", err)
+		s.logger.Error("sync: positions error", "user_id", userID, "exchange", c.cred.Exchange, "error", err)
 	}
 
 	if trades, err := ex.GetClosedTrades(c.creds, startMs, now.UnixMilli()); err == nil {
 		s.processHistory(userID, trades, c.cred.Exchange)
+		s.logger.Info("sync: history ok", "user_id", userID, "exchange", c.cred.Exchange, "count", len(trades))
 	} else {
-		s.logger.Error("sync: history error", "exchange", c.cred.Exchange, "error", err)
+		s.logger.Error("sync: history error", "user_id", userID, "exchange", c.cred.Exchange, "error", err)
+	}
+
+	// Spot trades (optional — only if exchange implements SpotTrader)
+	if st, ok := ex.(exchange.SpotTrader); ok {
+		if spotTrades, err := st.GetRecentTrades(c.creds, startMs, now.UnixMilli()); err == nil {
+			s.processSpotTrades(userID, spotTrades, c.cred.Exchange)
+		} else {
+			s.logger.Error("sync: spot trades error", "user_id", userID, "exchange", c.cred.Exchange, "error", err)
+		}
 	}
 
 	return nil
@@ -234,11 +336,11 @@ func (s *SyncService) processBalances(userID int64, balances []exchange.Balance,
 	for _, b := range balances {
 		assetID, err := s.repo.getOrCreateAsset(b.Symbol)
 		if err != nil {
-			s.logger.Error("sync: getOrCreateAsset", "symbol", b.Symbol, "error", err)
+			s.logger.Error("sync: getOrCreateAsset", "user_id", userID, "exchange", exchangeName, "symbol", b.Symbol, "error", err)
 			continue
 		}
 		if err := s.repo.upsertBalance(userID, assetID, exchangeName, b.Quantity); err != nil {
-			s.logger.Error("sync: upsertBalance", "symbol", b.Symbol, "error", err)
+			s.logger.Error("sync: upsertBalance", "user_id", userID, "exchange", exchangeName, "symbol", b.Symbol, "error", err)
 		}
 	}
 }
@@ -254,7 +356,7 @@ func (s *SyncService) processPositions(userID int64, positions []exchange.Positi
 
 		assetID, err := s.repo.getOrCreateAsset(p.Symbol)
 		if err != nil {
-			s.logger.Error("sync: getOrCreateAsset", "symbol", p.Symbol, "error", err)
+			s.logger.Error("sync: getOrCreateAsset", "user_id", userID, "exchange", exchangeName, "symbol", p.Symbol, "error", err)
 			continue
 		}
 
@@ -272,7 +374,7 @@ func (s *SyncService) processPositions(userID int64, positions []exchange.Positi
 			Leverage:   fmt.Sprintf("%dx", p.Leverage),
 		}
 		if err := s.repo.upsertPosition(row); err != nil {
-			s.logger.Error("sync: upsertPosition", "symbol", p.Symbol, "error", err)
+			s.logger.Error("sync: upsertPosition", "user_id", userID, "exchange", exchangeName, "symbol", p.Symbol, "error", err)
 		}
 	}
 }
@@ -307,6 +409,27 @@ func (s *SyncService) processHistory(userID int64, trades []exchange.ClosedTrade
 		}
 	}
 	s.logger.Info("sync: history inserted", "exchange", exchangeName, "inserted", inserted, "total", len(trades))
+}
+
+func (s *SyncService) processSpotTrades(userID int64, trades []exchange.SpotTrade, exchangeName string) {
+	inserted := 0
+	for _, t := range trades {
+		row := &models.SpotTrade{
+			UserID:   userID,
+			Exchange: exchangeName,
+			Symbol:   t.Symbol,
+			Side:     t.Side,
+			Quantity: t.Quantity,
+			Price:    t.Price,
+			Fee:      t.Fee,
+			FeeAsset: t.FeeAsset,
+			TradedAt: t.TradedAt,
+		}
+		if err := s.spotTradeRepo.Upsert(row); err == nil {
+			inserted++
+		}
+	}
+	s.logger.Info("sync: spot trades upserted", "exchange", exchangeName, "inserted", inserted, "total", len(trades))
 }
 
 func (s *SyncService) getCredentials(userID int64) ([]credWithKeys, error) {

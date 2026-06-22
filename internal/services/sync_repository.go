@@ -162,22 +162,39 @@ func (r *syncRepository) insertTransaction(userID, assetID int64, side string, q
 }
 
 // updateAverageBuyPrices — перераховує avg_buy_price для всіх активів користувача
-// на основі транзакцій типу 'buy' (тільки якщо manually_set = 0).
+// на основі spot_trades (side='buy') та transactions (type='buy').
+// Тільки якщо manually_set = 0.
 func (r *syncRepository) updateAverageBuyPrices(userID int64) error {
 	_, err := r.db.Exec(`
 		UPDATE user_portfolios up
+		JOIN assets a ON a.id = up.asset_id
 		SET up.avg_buy_price = (
-			SELECT SUM(t.quantity * t.price) / SUM(t.quantity)
-			FROM transactions t
-			WHERE t.user_id = up.user_id
-			  AND t.asset_id = up.asset_id
-			  AND t.type = 'buy'
+			SELECT SUM(qty * price) / NULLIF(SUM(qty), 0)
+			FROM (
+				SELECT s.quantity AS qty, s.price
+				FROM spot_trades s
+				WHERE s.user_id = up.user_id
+				  AND s.symbol = a.symbol
+				  AND s.side = 'buy'
+				UNION ALL
+				SELECT t.quantity AS qty, t.price
+				FROM transactions t
+				WHERE t.user_id = up.user_id
+				  AND t.asset_id = up.asset_id
+				  AND t.type = 'buy'
+			) combined
 		)
 		WHERE up.user_id = ?
 		  AND up.manually_set = 0
-		  AND EXISTS (
-			  SELECT 1 FROM transactions t
-			  WHERE t.user_id = up.user_id AND t.asset_id = up.asset_id AND t.type = 'buy'
+		  AND (
+			EXISTS (
+				SELECT 1 FROM spot_trades s
+				WHERE s.user_id = up.user_id AND s.symbol = a.symbol AND s.side = 'buy'
+			)
+			OR EXISTS (
+				SELECT 1 FROM transactions t
+				WHERE t.user_id = up.user_id AND t.asset_id = up.asset_id AND t.type = 'buy'
+			)
 		  )
 	`, userID)
 	return err
