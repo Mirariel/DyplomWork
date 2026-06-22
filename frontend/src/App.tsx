@@ -15,7 +15,8 @@ const SmartOrders = lazy(() => import('./pages/SmartOrders'))
 const GridBots   = lazy(() => import('./pages/GridBots'))
 const DCABots    = lazy(() => import('./pages/DCABots'))
 const Analytics  = lazy(() => import('./pages/Analytics'))
-const SettingsPage = lazy(() => import('./pages/Settings'))
+const SettingsPage     = lazy(() => import('./pages/Settings'))
+const FuturesPositions = lazy(() => import('./pages/FuturesPositions'))
 
 // ─── Shared spinner used by Suspense fallback ─────────────────────────────────
 
@@ -72,6 +73,7 @@ function AppRoutes() {
           <Route path="/bots" element={<GridBots />} />
           <Route path="/dca" element={<DCABots />} />
           <Route path="/analytics" element={<Analytics />} />
+          <Route path="/futures" element={<FuturesPositions />} />
           <Route path="/settings" element={<SettingsPage />} />
         </Route>
 

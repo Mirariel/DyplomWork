@@ -29,18 +29,36 @@ export interface AuthResponse {
   user: User
 }
 
+export interface UserAsset {
+  id: number
+  user_id: number
+  asset_id: number
+  exchange: string
+  symbol: string
+  quantity: number
+  avg_buy_price: number
+  current_price: number
+  manually_set: boolean
+  updated_at: string
+}
+
 export interface Position {
   id: number
   user_id: number
+  asset_id: number
   exchange: string
   symbol: string
   side: string
-  quantity: number
-  avg_price: number
+  margin_mode: string
+  entry_price: number
   mark_price: number
-  unrealized_pnl: number
-  category: string
-  comment: string
+  quantity: number
+  pnl: number
+  leverage: string
+  liq_price: number
+  margin: number
+  trade_size: number
+  comment: string | null
   updated_at: string
 }
 
@@ -81,9 +99,10 @@ export interface Credential {
 }
 
 export interface PortfolioSummary {
+  assets: UserAsset[]
   positions: Position[]
+  history: HistoryEntry[]
   total_value: number
-  total_unrealized_pnl: number
 }
 
 export interface AddCredentialPayload {
@@ -376,14 +395,18 @@ export const deleteBot = (id: number) =>
 
 // ─── Analytics ────────────────────────────────────────────────────────────────
 
-export const getSummary = () =>
-  api.get<TradeSummary>('/analytics/summary').then((r) => r.data)
+export const getSummary = (days = 0, exchange = '') =>
+  api.get<TradeSummary>('/analytics/summary', {
+    params: { ...(days > 0 ? { days } : {}), ...(exchange ? { exchange } : {}) },
+  }).then((r) => r.data)
 
 export const getCoins = () =>
   api.get<CoinPerformance[]>('/analytics/coins').then((r) => r.data)
 
-export const getSnapshots = (days = 30) =>
-  api.get<Snapshot[]>('/analytics/snapshots', { params: { days } }).then((r) => r.data)
+export const getSnapshots = (days = 30, exchange = '') =>
+  api.get<Snapshot[]>('/analytics/snapshots', {
+    params: { days, ...(exchange ? { exchange } : {}) },
+  }).then((r) => r.data)
 
 export const takeSnapshot = () =>
   api.post('/analytics/snapshot').then((r) => r.data)
@@ -392,6 +415,9 @@ export const getArbitrage = (minSpread?: number) =>
   api.get<ArbitrageOpportunity[]>('/analytics/arbitrage', {
     params: minSpread !== undefined ? { min_spread: minSpread } : {},
   }).then((r) => r.data)
+
+export const getTopSymbols = () =>
+  api.get<string[]>('/market/top-symbols').then((r) => r.data)
 
 // ─── DCA Bots ─────────────────────────────────────────────────────────────────
 
@@ -412,5 +438,71 @@ export const stopDCA = (id: number) =>
 
 export const deleteDCA = (id: number) =>
   api.delete(`/dca/${id}`).then((r) => r.data)
+
+// ─── Portfolio extra ─────────────────────────────────────────────────────────
+
+export const updateAssetPrice = (id: number, avg_buy_price: number, manually_set: boolean) =>
+  api.patch(`/portfolio/assets/${id}/price`, { avg_buy_price, manually_set }).then((r) => r.data)
+
+// ─── AI Advisor ──────────────────────────────────────────────────────────────
+
+export interface AIMessage {
+  role: 'user' | 'assistant'
+  content: string
+}
+
+export const askAI = (message: string, history: AIMessage[]) =>
+  api.post<{ reply: string }>('/ai/ask', { message, history }).then((r) => r.data)
+
+// ─── Futures Positions ────────────────────────────────────────────────────────
+
+export interface FuturesPosition {
+  id: number
+  user_id: number
+  exchange: string
+  symbol: string
+  side: 'LONG' | 'SHORT'
+  size: number
+  entry_price: number
+  mark_price: number
+  unrealized_pnl: number
+  leverage: number
+  margin_type: string
+  synced_at: string
+}
+
+export interface FuturesResponse {
+  positions: FuturesPosition[]
+  total_unrealized_pnl: number
+}
+
+export const getFuturesPositions = (exchange?: string) =>
+  api.get<FuturesResponse>('/futures/positions', {
+    params: exchange ? { exchange } : {},
+  }).then((r) => r.data)
+
+// ─── Spot Trades ──────────────────────────────────────────────────────────────
+
+export interface SpotTrade {
+  id: number
+  user_id: number
+  exchange: string
+  symbol: string
+  side: 'buy' | 'sell'
+  quantity: number
+  price: number
+  fee: number
+  fee_asset: string
+  traded_at: number // Unix ms
+}
+
+export interface SpotTradesResponse {
+  trades: SpotTrade[]
+}
+
+export const getSpotTrades = (exchange?: string) =>
+  api.get<SpotTradesResponse>('/spot-trades', {
+    params: exchange ? { exchange } : {},
+  }).then((r) => r.data)
 
 export default api

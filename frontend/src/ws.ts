@@ -12,6 +12,8 @@ interface WsUpdateMessage {
   type: 'update'
   positions: LivePosition[]
   spot_prices: Record<string, number>
+  spot_prices_by_exchange: Record<string, Record<string, number>>
+  top_symbols: string[]
 }
 
 type WsIncomingMessage = WsUpdateMessage | { type: string }
@@ -21,12 +23,16 @@ type WsIncomingMessage = WsUpdateMessage | { type: string }
 export interface WsState {
   positions: LivePosition[]
   spotPrices: Record<string, number>
+  spotPricesByExchange: Record<string, Record<string, number>>
+  topSymbols: string[]
   connected: boolean
 }
 
 export function useWebSocket(): WsState {
   const [positions, setPositions] = useState<LivePosition[]>([])
   const [spotPrices, setSpotPrices] = useState<Record<string, number>>({})
+  const [spotPricesByExchange, setSpotPricesByExchange] = useState<Record<string, Record<string, number>>>({})
+  const [topSymbols, setTopSymbols] = useState<string[]>([])
   const [connected, setConnected] = useState(false)
   const wsRef = useRef<WebSocket | null>(null)
   const reconnectTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -54,6 +60,8 @@ export function useWebSocket(): WsState {
           const upd = msg as WsUpdateMessage
           setPositions(upd.positions ?? [])
           setSpotPrices(upd.spot_prices ?? {})
+          setSpotPricesByExchange(upd.spot_prices_by_exchange ?? {})
+          setTopSymbols(upd.top_symbols ?? [])
         }
       } catch {
         // ignore malformed messages
@@ -83,5 +91,5 @@ export function useWebSocket(): WsState {
     }
   }, [connect])
 
-  return { positions, spotPrices, connected }
+  return { positions, spotPrices, spotPricesByExchange, topSymbols, connected }
 }

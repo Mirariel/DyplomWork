@@ -52,7 +52,7 @@ function Spinner() {
 function TradeSummarySection() {
   const { data, isLoading } = useQuery({
     queryKey: ['summary'],
-    queryFn: getSummary,
+    queryFn: () => getSummary(),
   })
 
   if (isLoading) return <Spinner />

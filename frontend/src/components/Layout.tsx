@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { NavLink, Outlet } from 'react-router-dom'
+import AiAdvisor from './AiAdvisor'
 import {
   LayoutDashboard,
   Briefcase,
@@ -13,6 +14,7 @@ import {
   Menu,
   X,
   Activity,
+  Layers,
 } from 'lucide-react'
 import { useAuth } from '../context/AuthContext'
 
@@ -26,6 +28,7 @@ const NAV_ITEMS = [
   { to: '/bots', label: 'Grid Bots', icon: Grid3x3 },
   { to: '/dca', label: 'DCA Bots', icon: TrendingUp },
   { to: '/analytics', label: 'Analytics', icon: BarChart2 },
+  { to: '/futures', label: 'Futures', icon: Layers },
   { to: '/settings', label: 'Settings', icon: Settings },
 ]
 
@@ -154,6 +157,9 @@ export default function Layout() {
           <Outlet />
         </main>
       </div>
+
+      {/* AI Advisor floating widget */}
+      <AiAdvisor />
     </div>
   )
 }
