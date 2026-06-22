@@ -29,7 +29,9 @@ func NewAnalyticsHandler(analytics *services.AnalyticsService, snapshots *models
 //	}
 func (h *AnalyticsHandler) Summary(c *fiber.Ctx) error {
 	userID := middleware.GetUserID(c)
-	summary, err := h.analytics.GetTradeSummary(userID)
+	days := c.QueryInt("days", 0)
+	exchange := c.Query("exchange", "")
+	summary, err := h.analytics.GetTradeSummary(userID, days, exchange)
 	if err != nil {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": err.Error()})
 	}

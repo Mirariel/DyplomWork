@@ -11,10 +11,11 @@ type SyncHandler struct {
 	sync      *services.SyncService
 	prices    *services.PriceService
 	portfolio *models.PortfolioRepository
+	analytics *services.AnalyticsService
 }
 
-func NewSyncHandler(sync *services.SyncService, prices *services.PriceService, portfolio *models.PortfolioRepository) *SyncHandler {
-	return &SyncHandler{sync: sync, prices: prices, portfolio: portfolio}
+func NewSyncHandler(sync *services.SyncService, prices *services.PriceService, portfolio *models.PortfolioRepository, analytics *services.AnalyticsService) *SyncHandler {
+	return &SyncHandler{sync: sync, prices: prices, portfolio: portfolio, analytics: analytics}
 }
 
 // POST /api/sync/full — повний синк з усіма біржами
@@ -23,6 +24,11 @@ func (h *SyncHandler) FullSync(c *fiber.Ctx) error {
 
 	if err := h.sync.SyncUser(userID); err != nil {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": err.Error()})
+	}
+
+	// Знімаємо snapshot одразу після синку — щоб графік Portfolio Value оновився
+	if h.analytics != nil {
+		go h.analytics.TakeSnapshotForUser(userID) //nolint:errcheck
 	}
 
 	return h.portfolioResponse(c, userID)

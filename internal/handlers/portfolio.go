@@ -9,12 +9,18 @@ import (
 )
 
 type PortfolioHandler struct {
-	repo       *models.PortfolioRepository
-	encryption *services.EncryptionService
+	repo               *models.PortfolioRepository
+	encryption         *services.EncryptionService
+	onCredentialAdded  func(userID int64) // опціональний хук для auto-discovery
 }
 
 func NewPortfolioHandler(repo *models.PortfolioRepository, enc *services.EncryptionService) *PortfolioHandler {
 	return &PortfolioHandler{repo: repo, encryption: enc}
+}
+
+// SetCredentialHook задає функцію, що викликається асинхронно після додавання credentials.
+func (h *PortfolioHandler) SetCredentialHook(fn func(userID int64)) {
+	h.onCredentialAdded = fn
 }
 
 // GET /api/portfolio
@@ -130,6 +136,11 @@ func (h *PortfolioHandler) AddCredential(c *fiber.Ctx) error {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": err.Error()})
 	}
 
+	// Auto-discovery: асинхронно синкуємо ф'ючерсні позиції для нового ключа
+	if h.onCredentialAdded != nil {
+		go h.onCredentialAdded(userID)
+	}
+
 	creds, err := h.repo.GetCredentials(userID)
 	if err != nil || len(creds) == 0 {
 		return c.Status(fiber.StatusCreated).JSON(fiber.Map{"status": "ok"})
@@ -189,6 +200,28 @@ func (h *PortfolioHandler) UpdateHistoryComment(c *fiber.Ctx) error {
 	}
 
 	if err := h.repo.UpdateHistoryComment(int64(id), userID, body.Comment); err != nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": err.Error()})
+	}
+	return c.JSON(fiber.Map{"status": "ok"})
+}
+
+// PATCH /api/portfolio/assets/:id/price
+func (h *PortfolioHandler) UpdateAssetPrice(c *fiber.Ctx) error {
+	userID := middleware.GetUserID(c)
+	id, err := c.ParamsInt("id")
+	if err != nil {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "invalid id"})
+	}
+
+	var body struct {
+		AvgBuyPrice float64 `json:"avg_buy_price"`
+		ManuallySet bool    `json:"manually_set"`
+	}
+	if err := c.BodyParser(&body); err != nil {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "invalid body"})
+	}
+
+	if err := h.repo.UpdateAssetPrice(int64(id), userID, body.AvgBuyPrice, body.ManuallySet); err != nil {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": err.Error()})
 	}
 	return c.JSON(fiber.Map{"status": "ok"})
