@@ -1069,3 +1069,123 @@ pnlPct = priceChange * float64(lev) * 100
 
 **Зачеплені файли:**
 `internal/ws/server.go` (broadcastToUser → pnlPct calculation)
+
+---
+
+## P-034 — OKX `lever` завжди "0" для cross-margin positions-history
+
+**Коли:** Реалізація відображення закритих угод (Фаза 16.7).
+
+**Проблема:**
+OKX `/api/v5/account/positions-history` повертає поле `lever: "0"` для **всіх** cross-margin позицій у historical mode. Це не баг — це задокументована поведінка API: для cross-margin режиму leverage є динамічним і не прив'язаний до конкретної позиції.
+
+```go
+// Результат: lever = "0" для кожної cross-margin угоди
+notionalUsd lever  mgnMode
+"125.4"     "0"    "cross"
+"259.95"    "0"    "cross"
+```
+
+У нас початково зберігалось `"0x"` → UI показував порожнє плече або `"0x"` для всіх OKX угод.
+
+**Рішення:**
+Два кроки:
+1. Для leverage — fallback на `/api/v5/account/leverage-info?instId={}&mgnMode=cross` після отримання positions-history. Повертає **поточне** налаштування плеча для інструменту (не histórical, але краще ніж 0).
+2. В UI — якщо `lever = "0x"` (невідоме) → показувати `"Cross"` замість нічого, бо це cross-margin режим.
+
+```go
+// Batch fetch leverage-info для інструментів з lever=0
+for k := range needsLever {
+    o.get("/api/v5/account/leverage-info", map[string]string{
+        "instId":  k.instId,
+        "mgnMode": k.mgnMode,
+    }, creds, &levResp)
+    leverageByInst[k] = int(parseFloat(levResp.Data[0].Lever))
+}
+```
+
+```tsx
+// Frontend: "Cross" замість "0x"
+const levLabel = lev > 0
+  ? e.leverage
+  : e.margin_mode === 'cross' ? 'Cross' : (e.margin_mode || '—')
+```
+
+**Урок:**
+OKX cross-margin — leverage не збережається у positions-history. Для historical cross-margin угод leverage або невідомий, або береться поточне налаштування з leverage-info. В UI завжди показувати тип маржі ("Cross") коли конкретне плече недоступне.
+
+**Зачеплені файли:** `internal/services/exchange/okx.go`, `frontend/src/pages/Portfolio.tsx`
+
+---
+
+## P-035 — OKX `closeTotalPos` — кількість в контрактах, а не в монетах; `ctVal` не враховується
+
+**Коли:** Відображення маржі в закритих угодах — значення були неправильними на 10x–1000x.
+
+**Проблема:**
+OKX поле `closeTotalPos` в `positions-history` — це **кількість контрактів**, а не кількість базової монети. Кожен інструмент має свій `ctVal` (contract value):
+- `ONDO-USDT-SWAP`: ctVal = 10 ONDO на контракт
+- `ZEC-USDT-SWAP`: ctVal = 0.01 ZEC на контракт
+- `XPL-USDT-SWAP`: ctVal = 10 XPL на контракт
+
+Ми розраховували notional як `qty × entryPrice`, де `qty = closeTotalPos` (кількість контрактів):
+```go
+// Неправильно:
+notionalUsd = math.Abs(qty) * parseFloat(item.OpenAvgPx)
+// ONDO: 37 контрактів × $0.339 = $12.54 (треба $125.4)
+```
+
+Поле `notionalUsd` в positions-history або повертається як 0, або не враховується — тому fallback давав неправильний результат.
+
+Додатково фронтенд **переобраховував** маржу з `e.quantity * e.entry_price` — та ж сама помилка.
+
+**Рішення:**
+Коли `notionalUsd = 0`, звертатись до публічного API `/api/v5/public/instruments?instType=SWAP&instId={}` → поле `ctVal`. Потім:
+```go
+// Правильно:
+ctVal := ctValByInst[item.InstId]  // наприклад, 10 для ONDO
+notionalUsd = math.Abs(qty) * ctVal * parseFloat(item.OpenAvgPx)
+// ONDO: 37 × 10 × $0.339 = $125.43 ✓
+```
+
+Фронтенд тепер показує `e.max_size` напряму (notionalUsd з БД, вже правильне після sync):
+```tsx
+// Не перераховуємо — довіряємо значенню з БД
+const margin = e.max_size
+```
+
+**Урок:**
+Для OKX SWAP контрактів **ніколи** не рахувати notional як `qty × price`. `qty` — завжди в контрактах, де 1 контракт ≠ 1 монета. Або використовувати `notionalUsd` з API (якщо не 0), або фетчити `ctVal` з `/public/instruments`. Зберігати в `max_size` (position_history) завчасно відконвертоване значення в USD.
+
+**Зачеплені файли:** `internal/services/exchange/okx.go`, `internal/services/sync_service.go`, `frontend/src/pages/Portfolio.tsx`
+
+---
+
+## P-036 — `npm run build` локально не оновлює frontend в Docker
+
+**Коли:** Кожного разу після змін у frontend при роботі з Docker Compose.
+
+**Проблема:**
+Запуск `npm run build` у папці `frontend/` локально оновлює `frontend/dist/` — але Docker контейнер `frontend` зібраний з окремим образом (nginx), який не монтує локальний `dist/`. Зміни у React коді після `docker compose up` не з'являються в браузері навіть після `Ctrl+F5`.
+
+```bash
+# Це НЕ оновлює Docker контейнер:
+cd frontend && npm run build
+# dist/ на диску оновлено, але контейнер nginx — ні
+```
+
+**Рішення:**
+Після змін у frontend (або Go-коді) необхідно перезібрати Docker образи і перезапустити контейнери:
+```bash
+# Зібрати нові образи:
+docker compose build frontend market-data trading
+
+# Перезапустити контейнери:
+docker compose up -d frontend market-data trading
+```
+Після цього — hard refresh у браузері (`Ctrl+Shift+R`).
+
+**Урок:**
+При роботі з Docker Compose ніколи не плутати локальний build з build всередині контейнера. Зміни набирають чинності лише після `docker compose build <service>` + `docker compose up -d <service>`. Для швидкої розробки frontend — використовувати `npm run dev` (Vite dev server на :5173) без Docker, а збирати Docker образ тільки при релізі.
+
+**Зачеплені файли:** `docker-compose.yml`, `frontend/Dockerfile`

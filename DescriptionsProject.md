@@ -44,6 +44,7 @@ Go дає нам goroutines, канали, і compile-time safety без overhea
 ### Фаза 16.4 — Portfolio Overhaul (Balances + recharts PriceChart) ✅ DONE
 ### Фаза 16.5 — Dashboard redesign (Exchange Filter + Live Prices Grid + Top Symbols) ✅ DONE
 ### Фаза 16.6 — Analytics Scheduler + PnL% formula fix ✅ DONE
+### Фаза 16.7 — History Data Quality Fix (Leverage + Margin + ctVal) ✅ DONE
 
 **Сервіси:**
 
@@ -60,7 +61,7 @@ Go дає нам goroutines, канали, і compile-time safety без overhea
 | MySQL | localhost:3306 | |
 | Redis | localhost:6379 | price cache |
 
-**БД:** `tradetracker_go` (MySQL), версія міграції: 9
+**БД:** `tradetracker_go` (MySQL), версія міграції: 13
 **Запуск:** `docker compose up --build -d` → 10 контейнерів
 
 ---
@@ -154,14 +155,14 @@ tradetracker-go/
 │   │   ├── price_service.go    — UpdateAllAssets() + GetLivePrices() + GetLivePricesByExchange()
 │   │   ├── smart_order_service.go — CheckAndTrigger: SL/TP/Trailing
 │   │   ├── bot_service.go      — Start/Stop/CheckBots (10 s)
-│   │   ├── analytics_service.go — TakeAllSnapshots/TakeSnapshotForUser + TradeSummary + CoinPerf + Arbitrage
+│   │   ├── analytics_service.go — TakeAllSnapshots/TakeSnapshotForUser + TradeSummary(+from/to+total_fees) + CoinPerf + Arbitrage
 │   │   ├── dca_service.go      — Start/Stop/CheckAndBuy (5 min)
 │   │   ├── top_symbols_service.go — TopSymbolsService (FetchTopSymbols via Binance 24h ticker, Redis TTL 1h)
 │   │   └── exchange/           — 6 бірж: Binance/OKX/Bybit/Gate/Kraken/KuCoin
-│   │       ├── interface.go    — Exchange interface + Balance/Position(+MarginType)/ClosedTrade/SpotTrade + SpotTrader
+│   │       ├── interface.go    — Exchange interface + Balance/Position(+MarginType)/ClosedTrade(+Fee/NotionalUsd/OpenedAt)/SpotTrade + SpotTrader
 │   │       ├── registry.go + client.go + helpers.go + parse.go + trader.go
 │   │       ├── binance.go      — GetBalances/GetOpenPositions/GetClosedTrades/GetPrices/GetRecentTrades
-│   │       ├── okx.go          — GetBalances/GetOpenPositions/GetClosedTrades/GetPrices/GetRecentTrades
+│   │       ├── okx.go          — GetBalances/GetOpenPositions/GetClosedTrades(+lever-info fallback+ctVal lookup)/GetPrices/GetRecentTrades
 │   │       ├── bybit.go        — GetBalances/GetOpenPositions/GetClosedTrades/GetPrices/GetRecentTrades
 │   │       ├── gate.go / kraken.go / kucoin.go
 │   │       ├── helpers_test.go — unit тести hmac/sha512/normalizeSymbol
@@ -194,7 +195,11 @@ tradetracker-go/
 │   ├── 000006_dca_bots         — dca_bots table
 │   ├── 000007_credentials_label — label + api_key_hint колонки в external_api_credentials
 │   ├── 000008_futures_positions — futures_positions table (DECIMAL(20,8), leverage INT, margin_type)
-│   └── 000009_spot_trades      — spot_trades table (buy/sell, fee, fee_asset, traded_at)
+│   ├── 000009_spot_trades      — spot_trades table (buy/sell, fee, fee_asset, traded_at)
+│   ├── 000010_history_fields       — fee, opened_at + max_size NOT NULL DEFAULT 0
+│   ├── 000011_analytics_from_to    — analytics summary підтримка from/to date фільтрів
+│   ├── 000012_position_history_max_size — max_size колонка (якщо відсутня)
+│   └── 000013_history_leverage_fix — UPDATE SET leverage='0x' WHERE leverage='1x' AND exchange='okx'
 │
 ├── frontend/
 │   ├── Dockerfile              — node:20-alpine → nginx:1.27-alpine
@@ -444,6 +449,24 @@ GET    /ws   (WebSocket)
   - Стара (невірна): `pnl / (entryPrice × qty / lev)` — ламається на inverse контрактах
   - Нова (вірна): price-based, не залежить від розміру контракту
 - [x] `PriceService.GetLivePricesByExchange()` — ціни по біржах для WS broadcast
+
+### Фаза 16.7 — History Data Quality Fix ✅
+- [x] `ClosedTrade` struct — додано `Fee float64`, `NotionalUsd float64`, `OpenedAt int64`
+- [x] `okx.GetClosedTrades` — парсинг `fee`, `cTime` (opened_at), `notionalUsd`
+- [x] `okx.GetClosedTrades` — leverage fallback: `/api/v5/account/leverage-info` для cross-margin (lever=0)
+- [x] `okx.GetClosedTrades` — ctVal lookup: `/api/v5/public/instruments` для коректного notional (qty в контрактах ≠ qty в монетах)
+- [x] `sync_service.processHistory` — збереження `Fee`, `OpenedAt`, `MaxSize = NotionalUsd || qty×price×ctVal`
+- [x] `sync_repository.insertHistory` — ON DUPLICATE KEY UPDATE: `leverage` (sentinel "0x"), `fee`, `opened_at`, `max_size`
+- [x] Міграція `000013` — виправлення невірного "1x" → "0x" для OKX cross-margin записів
+- [x] `analytics_service.GetTradeSummary` — підтримка `from`/`to` date params + `total_fees`
+- [x] `handlers/analytics.go` — читання `from`/`to` query params
+- [x] `api.ts` — `HistoryEntry.max_size`, `TradeSummary.total_fees`, `getSummary(from, to)`
+- [x] `Portfolio.tsx` HistoryTab:
+  - [x] R:R видалено з таблиці (залишено тільки в sidebar)
+  - [x] Leverage sub-label завжди показується: "Cross" для невідомого cross-margin
+  - [x] Margin = `e.max_size` (notionalUsd з БД; ctVal вже врахований бекендом)
+  - [x] Sidebar: дата-фільтри (1d/7d/1m/3m preset + from/to date picker)
+  - [x] Sidebar: R:R block (avgWin / |avgLoss|) з якісними мітками, Комісії, Profit Factor
 
 ### Фаза 17 — Майбутнє
 - [ ] E2E тести (httptest / testcontainers)

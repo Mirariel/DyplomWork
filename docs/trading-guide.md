@@ -230,13 +230,13 @@ curl -X POST http://localhost:8080/api/bots \
   -H "Authorization: Bearer <token>" \
   -H "Content-Type: application/json" \
   -d '{
-    "exchange":    "binance",
-    "symbol":      "BTC",
-    "category":    "spot",
-    "lower_price": 60000,
-    "upper_price": 70000,
-    "grids":       10,
-    "total_usdt":  1000
+    "exchange":     "binance",
+    "symbol":       "BTC",
+    "category":     "spot",
+    "price_low":    60000,
+    "price_high":   70000,
+    "grids":        10,
+    "qty_per_grid": 0.001
   }'
 
 # Запустити (виставляє buy-ордери по всіх рівнях)
@@ -244,7 +244,7 @@ curl -X POST http://localhost:8080/api/bots/1/start \
   -H "Authorization: Bearer <token>"
 ```
 
-З параметрами вище: 10 рівнів у діапазоні $60k–$70k, по $100 USDT на кожен.
+З параметрами вище: 10 рівнів у діапазоні $60k–$70k, по 0.001 BTC на кожен рівень.
 Крок між рівнями: ($70k − $60k) / 10 = $1000.
 
 ### Логіка роботи

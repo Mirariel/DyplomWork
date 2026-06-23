@@ -188,7 +188,7 @@ go test ./...
 ```bash
 make migrate-up        # застосувати всі нові
 make migrate-down      # відкотити останню
-make migrate-version   # поточна версія (має бути 7)
+make migrate-version   # поточна версія (має бути 13)
 make migrate-force     # примусово встановити версію (якщо dirty=true)
 ```
 

@@ -115,6 +115,10 @@ Prometheus метрики (text/plain format).
 |---|---|---|
 | limit | int | 15 |
 | offset | int | 0 |
+| from | string (ISO date) | — |
+| to | string (ISO date) | — |
+
+Кожен запис включає поле `max_size` — розмір позиції в USD (notionalUsd від OKX або qty×entryPrice як fallback).
 
 ---
 
@@ -165,6 +169,16 @@ Prometheus метрики (text/plain format).
 ### PATCH /api/positions/:id/comment
 ### PATCH /api/history/:id/comment
 **Тіло:** `{ "comment": "Хеджувальна позиція" }`
+
+---
+
+### PATCH /api/portfolio/assets/:id/price
+Вручну оновити середню ціну покупки активу.
+
+**Тіло:**
+```json
+{ "avg_buy_price": 45000.0, "manually_set": true }
+```
 
 ---
 
@@ -408,18 +422,28 @@ Dollar-Cost Averaging: автоматична купівля активу за �
 ### GET /api/analytics/summary
 Торгова статистика по всіх закритих угодах.
 
+| Параметр | Тип | Опис |
+|---|---|---|
+| days | int | Останні N днів (0 = всі) |
+| exchange | string | Фільтр по біржі |
+| from | string (ISO date) | Початок діапазону |
+| to | string (ISO date) | Кінець діапазону |
+
 **Відповідь 200:**
 ```json
 {
   "total_trades": 42,
   "winning_trades": 28,
   "losing_trades": 14,
-  "win_rate": 66.7,
-  "total_pnl": 1250.5,
+  "winrate": 66.7,
+  "total_realized_pnl": 1250.5,
   "avg_pnl": 29.77,
-  "profit_factor": 2.1,
   "best_trade": 450.0,
-  "worst_trade": -120.0
+  "worst_trade": -120.0,
+  "avg_win": 89.3,
+  "avg_loss": -42.5,
+  "profit_factor": 2.1,
+  "total_fees": 38.5
 }
 ```
 
@@ -431,21 +455,34 @@ Dollar-Cost Averaging: автоматична купівля активу за �
 **Відповідь 200:**
 ```json
 [
-  { "symbol": "BTC", "exchange": "binance", "trades": 15,
-    "total_pnl": 800.0, "win_rate": 73.3 }
+  {
+    "symbol": "BTC", "exchange": "binance",
+    "total_trades": 15, "winning_trades": 11,
+    "winrate": 73.3, "total_pnl": 800.0,
+    "avg_pnl": 53.3, "best_trade": 450.0, "worst_trade": -120.0
+  }
 ]
 ```
 
 ---
 
 ### GET /api/analytics/snapshots?days=30
-Знімки портфеля за останні N днів (для побудови графіку).
+Знімки портфеля за останні N днів.
+
+| Параметр | Тип | Опис |
+|---|---|---|
+| days | int | Останні N днів |
+| hours | int | Останні N годин |
+| from | string (ISO) | Початок діапазону |
+| to | string (ISO) | Кінець діапазону |
 
 **Відповідь 200:**
 ```json
 [
-  { "snapshot_date": "2026-06-20", "total_value": 48500.0 },
-  { "snapshot_date": "2026-06-21", "total_value": 50000.0 }
+  { "id": 1, "user_id": 7, "total_value": 48500.0, "spot_value": 30000.0,
+    "futures_pnl": -200.0, "snapshot_at": "2026-06-20T10:00:00Z" },
+  { "id": 2, "user_id": 7, "total_value": 50000.0, "spot_value": 32000.0,
+    "futures_pnl": 150.0,  "snapshot_at": "2026-06-21T10:00:00Z" }
 ]
 ```
 
@@ -455,6 +492,26 @@ Dollar-Cost Averaging: автоматична купівля активу за �
 Зробити знімок портфеля вручну (автоматично — щогодини).
 
 **Відповідь 200:** `{"message": "snapshot saved"}`
+
+---
+
+### GET /api/analytics/chart?range=7d&exchange=all
+Дані для побудови графіку вартості портфеля (15-хвилинні бакети).
+
+| Параметр | Тип | Допустимі значення |
+|---|---|---|
+| range | string | `1d`, `7d`, `30d`, `90d`, `custom` |
+| exchange | string | `all`, `binance`, `okx`, `bybit`... |
+| from | string (ISO) | для `range=custom` |
+| to | string (ISO) | для `range=custom` |
+
+**Відповідь 200:**
+```json
+[
+  { "recorded_at": "2026-06-20T10:00:00Z", "value": 48500.0 },
+  { "recorded_at": "2026-06-20T10:15:00Z", "value": 48720.0 }
+]
+```
 
 ---
 
@@ -477,6 +534,91 @@ Dollar-Cost Averaging: автоматична купівля активу за �
     "spread_pct": 0.63
   }
 ]
+```
+
+---
+
+## Futures Positions
+
+### GET /api/futures/positions
+Відкриті ф'ючерсні позиції (з БД, оновлюються при синку).
+
+| Параметр | Тип | Опис |
+|---|---|---|
+| exchange | string | Фільтр по біржі (необов'язково) |
+
+**Відповідь 200:**
+```json
+{
+  "positions": [
+    {
+      "id": 1, "user_id": 7, "exchange": "okx",
+      "symbol": "BTCUSDT", "side": "LONG",
+      "size": 0.01, "entry_price": 65000, "mark_price": 67000,
+      "unrealized_pnl": 20.0, "leverage": 10,
+      "margin_type": "cross", "synced_at": "2026-06-24T10:00:00Z"
+    }
+  ],
+  "total_unrealized_pnl": 20.0
+}
+```
+
+---
+
+## Spot Trades
+
+### GET /api/spot-trades
+Список спот-угод (з БД, синхронізуються при `/sync/history`).
+
+| Параметр | Тип | Опис |
+|---|---|---|
+| exchange | string | Фільтр по біржі (необов'язково) |
+
+**Відповідь 200:**
+```json
+{
+  "trades": [
+    {
+      "id": 1, "user_id": 7, "exchange": "okx",
+      "symbol": "BTCUSDT", "side": "buy",
+      "quantity": 0.001, "price": 65000,
+      "fee": 0.065, "fee_asset": "USDT",
+      "traded_at": 1719216000000
+    }
+  ]
+}
+```
+
+---
+
+## Market Data
+
+### GET /api/market/top-symbols
+Список топ-символів за обсягом (для WS-стрічки цін).
+
+**Відповідь 200:** `["BTCUSDT", "ETHUSDT", "SOLUSDT", ...]`
+
+---
+
+## AI Advisor
+
+### POST /api/ai/ask
+Запит до AI-радника (аналіз ринку, стратегії, Q&A). Використовує Claude API.
+
+**Тіло:**
+```json
+{
+  "message": "Яка твоя думка про поточну ситуацію з BTC?",
+  "history": [
+    { "role": "user", "content": "попереднє питання" },
+    { "role": "assistant", "content": "попередня відповідь" }
+  ]
+}
+```
+
+**Відповідь 200:**
+```json
+{ "reply": "На мою думку, BTC зараз..." }
 ```
 
 ---

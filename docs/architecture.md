@@ -86,8 +86,11 @@ TradeTracker Go — мультибіржовий портфельний трек
 | Prefix | Upstream |
 |---|---|
 | `/api/sync/*` | `market-data:8081` |
+| `/api/market/*` | `market-data:8081` |
 | `/api/portfolio*`, `/api/positions/*`, `/api/history/*` | `trading:8082` |
 | `/api/orders*`, `/api/smart-orders*`, `/api/bots*`, `/api/dca*` | `trading:8082` |
+| `/api/futures*`, `/api/spot-trades*` | `trading:8082` |
+| `/api/ai/*` | `trading:8082` |
 | `/api/analytics*` | `analytics:8083` |
 
 ---
@@ -213,13 +216,16 @@ tradetracker-go/
 │   │
 │   ├── handlers/               — HTTP handlers (Transport Layer, shared)
 │   │   ├── auth.go             — Register/Login/Logout/Me/UpdateProfile/ChangePassword
-│   │   ├── portfolio.go        — CRUD credentials (label, api_key_hint), comments
+│   │   ├── portfolio.go        — CRUD credentials (label, api_key_hint), comments, asset price
 │   │   ├── sync.go             — full/positions/history/prices
 │   │   ├── order.go            — PlaceOrder/CancelOrder/GetOrder/List
 │   │   ├── smart_order.go      — Create/List/Get/Cancel
 │   │   ├── bot.go              — Create/List/Get/Start/Stop/Delete
-│   │   ├── analytics.go        — Summary/Coins/Snapshots/Arbitrage
-│   │   └── dca.go              — Create/List/Get/Start/Stop/Delete
+│   │   ├── analytics.go        — Summary/Coins/Snapshots/Arbitrage/Chart
+│   │   ├── dca.go              — Create/List/Get/Start/Stop/Delete
+│   │   ├── futures.go          — GetPositions (з БД, фільтр по exchange)
+│   │   ├── spot_trades.go      — GetTrades (з БД, фільтр по exchange)
+│   │   └── ai.go               — AskAI (проксі до Claude API)
 │   │
 │   ├── services/
 │   │   ├── creds.go            — GetUserCreds() shared helper
@@ -263,7 +269,7 @@ tradetracker-go/
 │       ├── server.go           — broadcast loop (2 s): positions + prices
 │       └── handler.go          — Fiber WS upgrade
 │
-├── migrations/                 — SQL файли 000001–000007
+├── migrations/                 — SQL файли 000001–000013
 │
 ├── frontend/
 │   ├── Dockerfile              — node:20-alpine → nginx:1.27-alpine
@@ -316,9 +322,10 @@ func (h *OrderHandler) PlaceOrder(c *fiber.Ctx) error {
 
 ### 3. Exchange Adapters (services/exchange/)
 
-Два інтерфейси:
-- **Exchange** — читання: GetBalances, GetPositions, GetClosedTrades, GetPrices
-- **Trader** (опціональний) — PlaceOrder, CancelOrder, GetOrderStatus
+Три інтерфейси:
+- **Exchange** — читання: `GetBalances`, `GetOpenPositions`, `GetClosedTrades`, `GetPrices`
+- **SpotTrader** (опціональний) — `GetRecentTrades(startMs, endMs)` — спот-угоди; реалізовано Binance, OKX, Bybit
+- **Trader** (опціональний) — `PlaceOrder`, `CancelOrder`, `GetOrderStatus`
 
 ```go
 trader, ok := ex.(exchange.Trader)  // type assertion
@@ -326,6 +333,9 @@ if !ok {
     return c.Status(400).JSON(fiber.Map{"error": "trading not supported"})
 }
 ```
+
+`ClosedTrade` містить поля `NotionalUsd` (розмір позиції в USD), `Fee`, `OpenedAt`.
+Для OKX SWAP: `closeTotalPos` — кількість контрактів, множиться на `ctVal` (розмір контракту) і ціну.
 
 ### 4. Repository Layer (models/)
 
@@ -359,6 +369,12 @@ if !ok {
 | `portfolio_snapshots` | trading | 000005 |
 | `dca_bots` | trading | 000006 |
 | `external_api_credentials` (label, api_key_hint) | trading | 000007 |
+| `futures_positions` | trading, market-data | 000008 |
+| `spot_trades` | market-data | 000009 |
+| `position_history` (fee, opened_at) | market-data | 000010 |
+| `position_history` (max_size) | market-data | 000011 |
+| `position_history` (leverage `"0x"` sentinel) | market-data | 000012 |
+| `portfolio_snapshots` (spot_value, futures_pnl) | trading | 000013 |
 
 > Shared database — прагматичний підхід для дипломного проєкту.
 > Повна ізоляція БД (окрема схема/інстанс на сервіс) — природний наступний крок.
