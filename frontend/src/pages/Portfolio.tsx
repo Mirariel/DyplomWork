@@ -8,11 +8,12 @@ import {
   getPortfolio, getHistory, getCredentials,
   addCredential, deleteCredential,
   updatePositionComment, updateHistoryComment, updateAssetPrice,
-  fullSync, getSpotTrades,
+  fullSync, getSpotTrades, getSummary,
   type AddCredentialPayload, type Position, type HistoryEntry,
   type Credential, type UserAsset, type SpotTrade,
 } from '../api'
 import PriceChart from '../components/PriceChart'
+import ExchangeSelector from '../components/ExchangeSelector'
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -56,37 +57,6 @@ function PnlCell({ value }: { value: number }) {
     <span className={`font-medium ${value >= 0 ? 'text-green-400' : 'text-red-400'}`}>
       {value >= 0 ? '+' : ''}{fmt$(value)}
     </span>
-  )
-}
-
-// ─── Exchange filter tabs ─────────────────────────────────────────────────────
-
-function ExchangeTabs({
-  exchanges,
-  active,
-  onChange,
-}: {
-  exchanges: string[]
-  active: string
-  onChange: (ex: string) => void
-}) {
-  const tabs = [ALL, ...exchanges]
-  return (
-    <div className="flex gap-1 flex-wrap">
-      {tabs.map((ex) => (
-        <button
-          key={ex}
-          onClick={() => onChange(ex)}
-          className={`px-3 py-1 text-xs font-medium rounded-full transition-colors ${
-            active === ex
-              ? 'bg-blue-600 text-white'
-              : 'bg-slate-700 text-slate-400 hover:text-white'
-          }`}
-        >
-          {ex === ALL ? 'All' : ex.charAt(0).toUpperCase() + ex.slice(1)}
-        </button>
-      ))}
-    </div>
   )
 }
 
@@ -290,17 +260,17 @@ function EditPriceModal({
 
 // ─── Balances tab ─────────────────────────────────────────────────────────────
 
-function BalancesTab() {
+function BalancesTab({ selectedExchange }: { selectedExchange: string }) {
   const qc = useQueryClient()
   const { data, isLoading } = useQuery({ queryKey: ['portfolio'], queryFn: getPortfolio })
   const assets: UserAsset[] = data?.assets ?? []
 
-  const exchanges = [...new Set(assets.map((a) => a.exchange).filter(Boolean))]
-  const [exFilter, setExFilter] = useState(ALL)
   const [detail, setDetail] = useState<UserAsset | null>(null)
   const [editPrice, setEditPrice] = useState<UserAsset | null>(null)
 
-  const filtered = exFilter === ALL ? assets : assets.filter((a) => a.exchange === exFilter)
+  const filtered = selectedExchange === ALL || !selectedExchange
+    ? assets
+    : assets.filter((a) => a.exchange === selectedExchange)
 
   const totalValue = filtered.reduce((s, a) => s + a.quantity * a.current_price, 0)
 
@@ -309,8 +279,7 @@ function BalancesTab() {
   return (
     <div>
       {/* Header row */}
-      <div className="flex items-center justify-between px-4 py-3 border-b border-slate-700">
-        <ExchangeTabs exchanges={exchanges} active={exFilter} onChange={setExFilter} />
+      <div className="flex items-center justify-end px-4 py-3 border-b border-slate-700">
         <span className="text-sm text-slate-400">
           Total: <span className="text-white font-semibold">{fmt$(totalValue)}</span>
         </span>
@@ -396,16 +365,16 @@ function BalancesTab() {
 
 // ─── Positions tab ─────────────────────────────────────────────────────────────
 
-function PositionsTab() {
+function PositionsTab({ selectedExchange }: { selectedExchange: string }) {
   const qc = useQueryClient()
   const { data, isLoading } = useQuery({ queryKey: ['portfolio'], queryFn: getPortfolio })
   const positions: Position[] = data?.positions ?? []
 
-  const exchanges = [...new Set(positions.map((p) => p.exchange).filter(Boolean))]
-  const [exFilter, setExFilter] = useState(ALL)
   const [detail, setDetail] = useState<Position | null>(null)
 
-  const filtered = exFilter === ALL ? positions : positions.filter((p) => p.exchange === exFilter)
+  const filtered = selectedExchange === ALL || !selectedExchange
+    ? positions
+    : positions.filter((p) => p.exchange === selectedExchange)
 
   const totalPnl = filtered.reduce((s, p) => s + p.pnl, 0)
 
@@ -419,8 +388,7 @@ function PositionsTab() {
   return (
     <div>
       {/* Header */}
-      <div className="flex items-center justify-between px-4 py-3 border-b border-slate-700">
-        <ExchangeTabs exchanges={exchanges} active={exFilter} onChange={setExFilter} />
+      <div className="flex items-center justify-end px-4 py-3 border-b border-slate-700">
         <span className="text-sm text-slate-400">
           Total PnL:{' '}
           <span className={`font-semibold ${totalPnl >= 0 ? 'text-green-400' : 'text-red-400'}`}>
@@ -478,38 +446,51 @@ function PositionsTab() {
   )
 }
 
-// ─── History tab ──────────────────────────────────────────────────────────────
+// ─── Helpers ──────────────────────────────────────────────────────────────────
 
-const PRESETS = [
-  { label: 'Today', days: 1 },
-  { label: '7d', days: 7 },
-  { label: '30d', days: 30 },
-  { label: 'All', days: 0 },
-] as const
+// parseLeverage returns 0 for unknown ("0x", empty) and the actual value otherwise.
+function parseLeverage(lev: string): number {
+  if (!lev) return 0
+  const n = parseFloat(lev.replace('x', ''))
+  return isNaN(n) ? 0 : n
+}
+
+// ─── History tab ──────────────────────────────────────────────────────────────
 
 function HistoryTab() {
   const qc = useQueryClient()
   const [offset, setOffset] = useState(0)
-  const [analyticsDays, setAnalyticsDays] = useState<number>(30)
+  const [fromDate, setFromDate] = useState('')
+  const [toDate, setToDate]   = useState('')
   const LIMIT = 15
 
-  const { data, isLoading } = useQuery({
-    queryKey: ['history', LIMIT, offset],
-    queryFn: () => getHistory(LIMIT, offset),
-  })
+  const resetOffset = () => setOffset(0)
 
-  const { data: summary } = useQuery({
-    queryKey: ['analytics-summary', analyticsDays],
-    queryFn: () =>
-      fetch(`/api/analytics/summary${analyticsDays > 0 ? `?days=${analyticsDays}` : ''}`, {
-        headers: { Authorization: `Bearer ${localStorage.getItem('tt_token') ?? ''}` },
-      }).then((r) => r.json()),
-    staleTime: 60_000,
+  const applyPreset = (days: number) => {
+    const to   = new Date()
+    const from = new Date()
+    from.setDate(from.getDate() - (days - 1))
+    const fmt = (d: Date) => d.toISOString().slice(0, 10)
+    setFromDate(fmt(from))
+    setToDate(fmt(to))
+    resetOffset()
+  }
+
+  const { data, isLoading } = useQuery({
+    queryKey: ['history', LIMIT, offset, fromDate, toDate],
+    queryFn: () => getHistory(LIMIT, offset, fromDate || undefined, toDate || undefined),
   })
 
   const commentMutation = useMutation({
     mutationFn: ({ id, comment }: { id: number; comment: string }) => updateHistoryComment(id, comment),
     onSuccess: () => qc.invalidateQueries({ queryKey: ['history'] }),
+  })
+
+  // analytics panel — same date range as table
+  const { data: summary } = useQuery({
+    queryKey: ['analytics-summary', fromDate, toDate],
+    queryFn: () => getSummary(0, '', fromDate || undefined, toDate || undefined),
+    staleTime: 60_000,
   })
 
   const entries: HistoryEntry[] = data?.data ?? []
@@ -519,15 +500,66 @@ function HistoryTab() {
 
   if (isLoading) return <Spinner />
 
+  // Per-row computed values — max_size = notionalUsd from OKX (already accounts for ctVal)
+  const rowData = entries.map((e) => {
+    const lev = parseLeverage(e.leverage)
+    const levLabel = lev > 0
+      ? e.leverage
+      : e.margin_mode === 'cross' ? 'Cross' : (e.margin_mode || '—')
+    return { margin: e.max_size, levLabel }
+  })
+
+  // Aggregate R:R: avgWin / |avgLoss| — matches old project formula
+  const aggRR = summary && summary.avg_loss < 0
+    ? summary.avg_win / Math.abs(summary.avg_loss)
+    : null
+
   return (
     <div className="flex gap-0">
       {/* Main table */}
       <div className="flex-1 min-w-0">
+
+        {/* Period filter */}
+        <div className="flex items-center gap-2 px-4 py-3 border-b border-slate-700 flex-wrap">
+          {[{ label: '1d', days: 1 }, { label: '7d', days: 7 }, { label: '1m', days: 30 }, { label: '3m', days: 90 }].map((p) => (
+            <button
+              key={p.label}
+              onClick={() => applyPreset(p.days)}
+              className="px-2.5 py-1 text-xs font-medium rounded-lg bg-slate-700 text-slate-400 hover:bg-slate-600 hover:text-white transition-colors"
+            >
+              {p.label}
+            </button>
+          ))}
+          <span className="text-slate-700 text-xs">|</span>
+          <input
+            type="date"
+            value={fromDate}
+            onChange={(e) => { setFromDate(e.target.value); resetOffset() }}
+            className="text-xs bg-slate-700 border border-slate-600 text-slate-300 rounded-lg px-2 py-1.5 focus:outline-none focus:border-blue-500"
+          />
+          <span className="text-slate-600 text-xs">—</span>
+          <input
+            type="date"
+            value={toDate}
+            onChange={(e) => { setToDate(e.target.value); resetOffset() }}
+            className="text-xs bg-slate-700 border border-slate-600 text-slate-300 rounded-lg px-2 py-1.5 focus:outline-none focus:border-blue-500"
+          />
+          {(fromDate || toDate) && (
+            <button
+              onClick={() => { setFromDate(''); setToDate(''); resetOffset() }}
+              className="text-xs text-slate-500 hover:text-slate-300 px-2 py-1 rounded bg-slate-700"
+            >
+              <X size={11} />
+            </button>
+          )}
+          <span className="ml-auto text-xs text-slate-500">{total} угод</span>
+        </div>
+
         <div className="overflow-x-auto">
           <table className="w-full text-sm">
             <thead>
               <tr className="text-xs text-slate-400 border-b border-slate-700">
-                {['Symbol', 'Exchange', 'Side', 'Qty', 'Entry', 'Exit', 'PnL', 'Date', 'Comment'].map((h) => (
+                {['Символ / Плече', 'Біржа', 'Side', 'Маржа', 'Вхід', 'Вихід', 'PnL', 'Закрито', 'Коментар'].map((h) => (
                   <th key={h} className="px-4 py-3 text-left font-medium whitespace-nowrap">{h}</th>
                 ))}
               </tr>
@@ -536,36 +568,44 @@ function HistoryTab() {
               {entries.length === 0 ? (
                 <tr>
                   <td colSpan={9} className="px-4 py-6 text-slate-500 text-center text-sm">
-                    No trade history found.
+                    Немає закритих угод. Запустіть Sync History для імпорту.
                   </td>
                 </tr>
-              ) : entries.map((e) => (
-                <tr key={e.id} className="border-b border-slate-700/50 hover:bg-slate-700/40 transition-colors">
-                  <td className="px-4 py-3 font-medium text-white">{e.symbol}</td>
-                  <td className="px-4 py-3 text-slate-300 capitalize">{e.exchange}</td>
-                  <td className="px-4 py-3"><SideBadge side={e.side} /></td>
-                  <td className="px-4 py-3 text-slate-300">{e.quantity}</td>
-                  <td className="px-4 py-3 text-slate-300">{fmt$(e.entry_price)}</td>
-                  <td className="px-4 py-3 text-slate-300">{fmt$(e.exit_price)}</td>
-                  <td className="px-4 py-3"><PnlCell value={e.realized_pnl} /></td>
-                  <td className="px-4 py-3 text-slate-300 whitespace-nowrap">{fmtDate(e.closed_at)}</td>
-                  <td className="px-4 py-3">
-                    <EditableComment
-                      value={e.comment ?? ''}
-                      onSave={(comment) =>
-                        commentMutation.mutateAsync({ id: e.id, comment }).then(() => undefined)
-                      }
-                    />
-                  </td>
-                </tr>
-              ))}
+              ) : entries.map((e, i) => {
+                const { margin, levLabel } = rowData[i]
+                return (
+                  <tr key={e.id} className="border-b border-slate-700/50 hover:bg-slate-700/40 transition-colors">
+                    <td className="px-4 py-3">
+                      <div className="font-medium text-white">{e.symbol}</div>
+                      <div className="text-xs text-slate-500 mt-0.5">{levLabel}</div>
+                    </td>
+                    <td className="px-4 py-3 text-slate-300 capitalize">{e.exchange}</td>
+                    <td className="px-4 py-3"><SideBadge side={e.side} /></td>
+                    <td className="px-4 py-3 text-slate-200 font-medium">
+                      {margin > 0 ? fmt$(margin) : <span className="text-slate-600">—</span>}
+                    </td>
+                    <td className="px-4 py-3 text-slate-300">{fmt$(e.entry_price)}</td>
+                    <td className="px-4 py-3 text-slate-300">{fmt$(e.exit_price)}</td>
+                    <td className="px-4 py-3"><PnlCell value={e.realized_pnl} /></td>
+                    <td className="px-4 py-3 text-slate-300 whitespace-nowrap">{fmtDate(e.closed_at)}</td>
+                    <td className="px-4 py-3">
+                      <EditableComment
+                        value={e.comment ?? ''}
+                        onSave={(comment) =>
+                          commentMutation.mutateAsync({ id: e.id, comment }).then(() => undefined)
+                        }
+                      />
+                    </td>
+                  </tr>
+                )
+              })}
             </tbody>
           </table>
         </div>
 
         {totalPages > 1 && (
           <div className="flex items-center justify-between px-4 py-3 border-t border-slate-700">
-            <p className="text-xs text-slate-400">Page {page} of {totalPages} ({total} trades)</p>
+            <p className="text-xs text-slate-400">Сторінка {page} з {totalPages} ({total} угод)</p>
             <div className="flex gap-2">
               <button disabled={offset === 0} onClick={() => setOffset((o) => Math.max(0, o - LIMIT))}
                 className="p-1.5 rounded bg-slate-700 hover:bg-slate-600 disabled:opacity-40 text-slate-300">
@@ -580,74 +620,104 @@ function HistoryTab() {
         )}
       </div>
 
-      {/* Analytics panel */}
+      {/* Analytics sidebar */}
       <div className="w-56 flex-shrink-0 border-l border-slate-700 p-4 space-y-4">
-        <div>
-          <p className="text-xs text-slate-500 mb-2 uppercase tracking-wide">PnL Analytics</p>
-          <div className="flex gap-1 flex-wrap">
-            {PRESETS.map((p) => (
-              <button key={p.label} onClick={() => setAnalyticsDays(p.days)}
-                className={`px-2 py-0.5 text-xs rounded-full transition-colors ${
-                  analyticsDays === p.days
-                    ? 'bg-blue-600 text-white'
-                    : 'bg-slate-700 text-slate-400 hover:text-white'
-                }`}>
-                {p.label}
-              </button>
-            ))}
-          </div>
-        </div>
+        <p className="text-xs text-slate-500 uppercase tracking-wide font-semibold">
+          {fromDate || toDate ? 'Статистика за період' : 'Загальна статистика'}
+        </p>
 
         {summary ? (
-          <div className="space-y-3 text-sm">
+          <>
+            {/* PnL */}
             <div>
-              <p className="text-xs text-slate-500">Total PnL</p>
-              <p className={`text-lg font-bold ${(summary.total_realized_pnl ?? 0) >= 0 ? 'text-green-400' : 'text-red-400'}`}>
-                {(summary.total_realized_pnl ?? 0) >= 0 ? '+' : ''}{fmt$(summary.total_realized_pnl ?? 0)}
+              <p className="text-xs text-slate-500 mb-0.5">Загальний PnL</p>
+              <p className={`text-xl font-bold ${summary.total_realized_pnl >= 0 ? 'text-green-400' : 'text-red-400'}`}>
+                {summary.total_realized_pnl >= 0 ? '+' : ''}{fmt$(summary.total_realized_pnl)}
               </p>
             </div>
-            <div className="grid grid-cols-2 gap-2 text-xs">
-              <div>
-                <p className="text-slate-500">Trades</p>
-                <p className="text-white font-medium">{summary.total_trades ?? 0}</p>
+
+            {/* Trade counts */}
+            <div className="space-y-1.5 text-xs">
+              <div className="flex justify-between">
+                <span className="text-slate-400">Угод</span>
+                <span className="text-white font-semibold">{summary.total_trades}</span>
               </div>
-              <div>
-                <p className="text-slate-500">Win Rate</p>
-                <p className={`font-medium ${(summary.winrate ?? 0) >= 50 ? 'text-green-400' : 'text-red-400'}`}>
-                  {(summary.winrate ?? 0).toFixed(1)}%
-                </p>
+              <div className="flex justify-between">
+                <span className="text-slate-400">Прибуткових</span>
+                <span className="text-green-400 font-semibold">{summary.winning_trades}</span>
               </div>
-              <div>
-                <p className="text-slate-500">Best</p>
-                <p className="text-green-400 font-medium">{fmt$(summary.best_trade ?? 0)}</p>
-              </div>
-              <div>
-                <p className="text-slate-500">Worst</p>
-                <p className="text-red-400 font-medium">{fmt$(summary.worst_trade ?? 0)}</p>
+              <div className="flex justify-between">
+                <span className="text-slate-400">Збиткових</span>
+                <span className="text-red-400 font-semibold">{summary.losing_trades}</span>
               </div>
             </div>
+
             {/* Win rate bar */}
             <div>
               <div className="flex justify-between text-xs text-slate-500 mb-1">
-                <span>{summary.winning_trades ?? 0}W</span>
-                <span>{(summary.total_trades ?? 0) - (summary.winning_trades ?? 0)}L</span>
+                <span>Win Rate</span>
+                <span className={`font-semibold ${summary.winrate >= 50 ? 'text-green-400' : 'text-red-400'}`}>
+                  {summary.winrate.toFixed(1)}%
+                </span>
               </div>
               <div className="h-1.5 bg-slate-700 rounded-full overflow-hidden">
-                <div
-                  className="h-full bg-green-500 rounded-full"
-                  style={{ width: `${Math.min(100, summary.winrate ?? 0)}%` }}
-                />
+                <div className="h-full bg-green-500 rounded-full" style={{ width: `${Math.min(100, summary.winrate)}%` }} />
               </div>
             </div>
-            <div className="text-xs">
-              <p className="text-slate-500">Profit Factor</p>
-              <p className={`font-medium ${(summary.profit_factor ?? 0) >= 1.5 ? 'text-green-400' : (summary.profit_factor ?? 0) >= 1 ? 'text-yellow-400' : 'text-red-400'}`}>
-                {(summary.profit_factor ?? 0).toFixed(2)}
-              </p>
+
+            {/* Best / Worst / Avg */}
+            <div className="space-y-1.5 text-xs">
+              <div className="flex justify-between">
+                <span className="text-slate-400">Найкраща</span>
+                <span className="text-green-400 font-medium">+{fmt$(summary.best_trade)}</span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-slate-400">Найгірша</span>
+                <span className="text-red-400 font-medium">{fmt$(summary.worst_trade)}</span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-slate-400">Середня</span>
+                <span className={`font-medium ${summary.avg_pnl >= 0 ? 'text-green-400' : 'text-red-400'}`}>
+                  {summary.avg_pnl >= 0 ? '+' : ''}{fmt$(summary.avg_pnl)}
+                </span>
+              </div>
             </div>
-          </div>
+
+            {/* R:R aggregate — avgWin / |avgLoss|, same formula as old project */}
+            <div className="bg-slate-700/50 rounded-lg p-3 space-y-1.5">
+              <p className="text-xs text-slate-400 font-medium">Risk / Reward</p>
+              {aggRR !== null ? (
+                <>
+                  <div className={`text-sm font-bold ${aggRR >= 1.5 ? 'text-green-400' : aggRR >= 1.0 ? 'text-yellow-400' : 'text-red-400'}`}>
+                    1 : {aggRR.toFixed(2)}
+                  </div>
+                  <p className={`text-xs ${aggRR >= 1.5 ? 'text-green-500' : aggRR >= 1.0 ? 'text-yellow-500' : 'text-red-400'}`}>
+                    {aggRR >= 1.5 ? 'Відмінне співвідношення' : aggRR >= 1.0 ? 'Прийнятне співвідношення' : 'Ризик перевищує прибуток'}
+                  </p>
+                </>
+              ) : (
+                <span className="text-slate-600 text-xs">—</span>
+              )}
+            </div>
+
+            {/* Fees + Profit Factor */}
+            <div className="space-y-1.5 text-xs">
+              {summary.total_fees > 0 && (
+                <div className="flex justify-between">
+                  <span className="text-slate-400">Комісії</span>
+                  <span className="text-slate-300 font-medium">-{fmt$(summary.total_fees)}</span>
+                </div>
+              )}
+              <div className="flex justify-between">
+                <span className="text-slate-400">Profit Factor</span>
+                <span className={`font-medium ${summary.profit_factor >= 1.5 ? 'text-green-400' : summary.profit_factor >= 1 ? 'text-yellow-400' : 'text-red-400'}`}>
+                  {summary.profit_factor.toFixed(2)}
+                </span>
+              </div>
+            </div>
+          </>
         ) : (
-          <div className="text-xs text-slate-600">Loading stats…</div>
+          <div className="text-xs text-slate-600">Завантаження…</div>
         )}
       </div>
     </div>
@@ -816,7 +886,7 @@ function CredentialsTab() {
 
 // ─── Spot Trades tab ─────────────────────────────────────────────────────────
 
-function SpotTradesTab() {
+function SpotTradesTab({ selectedExchange }: { selectedExchange: string }) {
   const { data, isLoading } = useQuery({
     queryKey: ['spot-trades'],
     queryFn: () => getSpotTrades(),
@@ -824,10 +894,9 @@ function SpotTradesTab() {
   })
   const trades: SpotTrade[] = data?.trades ?? []
 
-  const exchanges = [...new Set(trades.map((t) => t.exchange).filter(Boolean))]
-  const [exFilter, setExFilter] = useState(ALL)
-
-  const filtered = exFilter === ALL ? trades : trades.filter((t) => t.exchange === exFilter)
+  const filtered = selectedExchange === ALL || !selectedExchange
+    ? trades
+    : trades.filter((t) => t.exchange === selectedExchange)
 
   const fmtTs = (ms: number) => {
     if (!ms) return '—'
@@ -838,8 +907,7 @@ function SpotTradesTab() {
 
   return (
     <div>
-      <div className="flex items-center justify-between px-4 py-3 border-b border-slate-700">
-        <ExchangeTabs exchanges={exchanges} active={exFilter} onChange={setExFilter} />
+      <div className="flex items-center justify-end px-4 py-3 border-b border-slate-700">
         <span className="text-xs text-slate-500">{filtered.length} trades</span>
       </div>
 
@@ -887,12 +955,13 @@ type Tab = (typeof TABS)[number]
 
 export default function Portfolio() {
   const [tab, setTab] = useState<Tab>('Balances')
+  const [selectedExchange, setSelectedExchange] = useState('')
   const { data } = useQuery({ queryKey: ['portfolio'], queryFn: getPortfolio })
   const totalValue = data?.total_value ?? 0
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-between">
+      <div className="flex items-center justify-between flex-wrap gap-3">
         <div>
           <h1 className="text-2xl font-bold text-white">Portfolio</h1>
           {totalValue > 0 && (
@@ -901,6 +970,10 @@ export default function Portfolio() {
             </p>
           )}
         </div>
+        {/* Account selector — один для всіх табів */}
+        {tab !== 'Credentials' && (
+          <ExchangeSelector value={selectedExchange} onChange={setSelectedExchange} />
+        )}
       </div>
 
       {/* Tab bar */}
@@ -917,10 +990,10 @@ export default function Portfolio() {
 
       {/* Content */}
       <div className="bg-slate-800 rounded-xl border border-slate-700 overflow-hidden">
-        {tab === 'Balances' && <BalancesTab />}
-        {tab === 'Positions' && <PositionsTab />}
-        {tab === 'History' && <HistoryTab />}
-        {tab === 'Spot Trades' && <SpotTradesTab />}
+        {tab === 'Balances'    && <BalancesTab    selectedExchange={selectedExchange} />}
+        {tab === 'Positions'   && <PositionsTab   selectedExchange={selectedExchange} />}
+        {tab === 'History'     && <HistoryTab />}
+        {tab === 'Spot Trades' && <SpotTradesTab  selectedExchange={selectedExchange} />}
         {tab === 'Credentials' && <div className="p-5"><CredentialsTab /></div>}
       </div>
     </div>

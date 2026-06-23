@@ -65,16 +65,20 @@ export interface Position {
 export interface HistoryEntry {
   id: number
   user_id: number
-  exchange: string
   symbol: string
-  side: string
-  quantity: number
+  exchange: string
+  side: string        // LONG | SHORT
+  margin_mode: string
+  leverage: string
   entry_price: number
   exit_price: number
+  quantity: number
   realized_pnl: number
-  category: string
-  comment: string
-  closed_at: string
+  fee: number
+  max_size: number    // position size in USD (notionalUsd from OKX, or qty×entry fallback)
+  opened_at: string | null
+  closed_at: string | null
+  comment: string | null
   created_at: string
 }
 
@@ -214,6 +218,7 @@ export interface TradeSummary {
   avg_win: number
   avg_loss: number
   profit_factor: number
+  total_fees: number
 }
 
 export interface CoinPerformance {
@@ -234,7 +239,12 @@ export interface Snapshot {
   total_value: number
   spot_value: number
   futures_pnl: number
-  snapshot_date: string
+  snapshot_at: string  // ISO datetime e.g. "2026-06-23T14:00:00Z"
+}
+
+export interface ChartPoint {
+  recorded_at: string  // ISO datetime, 15-min bucketed
+  value: number
 }
 
 // LivePosition — position data from WS broadcast (not from DB)
@@ -313,8 +323,10 @@ export const changePassword = (current_password: string, new_password: string) =
 export const getPortfolio = () =>
   api.get<PortfolioSummary>('/portfolio').then((r) => r.data)
 
-export const getHistory = (limit = 15, offset = 0) =>
-  api.get<HistoryResponse>('/portfolio/history', { params: { limit, offset } }).then((r) => r.data)
+export const getHistory = (limit = 15, offset = 0, from?: string, to?: string) =>
+  api.get<HistoryResponse>('/portfolio/history', {
+    params: { limit, offset, ...(from ? { from } : {}), ...(to ? { to } : {}) },
+  }).then((r) => r.data)
 
 export const getCredentials = () =>
   api.get<Credential[]>('/portfolio/credentials').then((r) => r.data)
@@ -395,17 +407,35 @@ export const deleteBot = (id: number) =>
 
 // ─── Analytics ────────────────────────────────────────────────────────────────
 
-export const getSummary = (days = 0, exchange = '') =>
+export const getSummary = (days = 0, exchange = '', from?: string, to?: string) =>
   api.get<TradeSummary>('/analytics/summary', {
-    params: { ...(days > 0 ? { days } : {}), ...(exchange ? { exchange } : {}) },
+    params: {
+      ...(days > 0 ? { days } : {}),
+      ...(exchange ? { exchange } : {}),
+      ...(from ? { from } : {}),
+      ...(to ? { to } : {}),
+    },
   }).then((r) => r.data)
 
 export const getCoins = () =>
   api.get<CoinPerformance[]>('/analytics/coins').then((r) => r.data)
 
-export const getSnapshots = (days = 30, exchange = '') =>
-  api.get<Snapshot[]>('/analytics/snapshots', {
-    params: { days, ...(exchange ? { exchange } : {}) },
+export const getSnapshots = (params: {
+  days?: number
+  hours?: number
+  from?: string
+  to?: string
+} = {}) =>
+  api.get<Snapshot[]>('/analytics/snapshots', { params }).then((r) => r.data)
+
+export const getPortfolioChart = (
+  range = '7d',
+  exchange = 'all',
+  from?: string,
+  to?: string,
+) =>
+  api.get<ChartPoint[]>('/analytics/chart', {
+    params: { range, exchange, ...(from && to ? { from, to } : {}) },
   }).then((r) => r.data)
 
 export const takeSnapshot = () =>

@@ -9,8 +9,9 @@ import {
   Tooltip,
   ResponsiveContainer,
 } from 'recharts'
-import { RefreshCw, Wifi, WifiOff, Search } from 'lucide-react'
-import { getSummary, getSnapshots, fullSync, getCredentials, getPortfolio, getTopSymbols } from '../api'
+import { RefreshCw, Wifi, WifiOff, Search, CalendarDays, X } from 'lucide-react'
+import { getSummary, getPortfolioChart, fullSync, getPortfolio, getTopSymbols, type ChartPoint } from '../api'
+import ExchangeSelector from '../components/ExchangeSelector'
 import { useWebSocket } from '../ws'
 import CoinModal from '../components/CoinModal'
 
@@ -20,9 +21,6 @@ const fmt$ = (v: number) =>
   `$${v.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
 
 const fmtPct = (v: number) => `${v.toFixed(2)}%`
-
-const fmtDate = (iso: string) =>
-  new Date(iso).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
 
 // ─── Stat card ────────────────────────────────────────────────────────────────
 
@@ -58,12 +56,51 @@ function StatCard({
 
 // ─── Period options ───────────────────────────────────────────────────────────
 
-const PERIOD_OPTIONS = [
-  { label: '7d', days: 7 },
-  { label: '30d', days: 30 },
-  { label: '90d', days: 90 },
-  { label: 'All', days: 0 },
+type PeriodKey = '1d' | '7d' | '30d' | '90d' | 'all' | 'custom'
+
+const PERIOD_OPTIONS: { label: string; key: PeriodKey }[] = [
+  { label: '1d',    key: '1d' },
+  { label: '7d',    key: '7d' },
+  { label: '30d',   key: '30d' },
+  { label: '90d',   key: '90d' },
+  { label: 'All',   key: 'all' },
+  { label: 'Custom',key: 'custom' },
 ]
+
+// Convert period key to days for summary stats
+function periodToDays(key: PeriodKey): number {
+  switch (key) {
+    case '1d':  return 1
+    case '7d':  return 7
+    case '30d': return 30
+    case '90d': return 90
+    default:    return 0
+  }
+}
+
+// Downsample chart data to at most maxPoints points
+function downsample(data: ChartPoint[], maxPoints: number): ChartPoint[] {
+  if (data.length <= maxPoints) return data
+  const step = Math.ceil(data.length / maxPoints)
+  const result = data.filter((_, i) => i % step === 0)
+  if (result[result.length - 1] !== data[data.length - 1]) {
+    result.push(data[data.length - 1])
+  }
+  return result
+}
+
+// Format recorded_at label based on the selected period
+function fmtChartLabel(isoStr: string, key: PeriodKey): string {
+  const d = new Date(isoStr)
+  if (key === '1d') {
+    return d.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: false })
+  }
+  if (key === '7d') {
+    return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) +
+      ' ' + d.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: false })
+  }
+  return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
+}
 
 // ─── Dashboard ────────────────────────────────────────────────────────────────
 
@@ -72,7 +109,9 @@ export default function Dashboard() {
   const { positions, spotPrices, spotPricesByExchange, topSymbols: wsTopSymbols, connected } = useWebSocket()
   const [syncError, setSyncError] = useState('')
   const [selectedExchange, setSelectedExchange] = useState('')
-  const [selectedDays, setSelectedDays] = useState(30)
+  const [selectedPeriod, setSelectedPeriod] = useState<PeriodKey>('30d')
+  const [customFrom, setCustomFrom] = useState('')
+  const [customTo, setCustomTo]   = useState('')
   const [coinSearch, setCoinSearch] = useState('')
   const [selectedCoin, setSelectedCoin] = useState<{ symbol: string; price: number } | null>(null)
 
@@ -81,19 +120,19 @@ export default function Dashboard() {
     queryFn: getPortfolio,
   })
 
+  const summaryDays = periodToDays(selectedPeriod)
   const { data: summary } = useQuery({
-    queryKey: ['summary', selectedDays, selectedExchange],
-    queryFn: () => getSummary(selectedDays, selectedExchange),
+    queryKey: ['summary', summaryDays, selectedExchange],
+    queryFn: () => getSummary(summaryDays, selectedExchange),
   })
 
-  const { data: snapshots = [] } = useQuery({
-    queryKey: ['snapshots', selectedDays],
-    queryFn: () => getSnapshots(selectedDays > 0 ? selectedDays : 365),
-  })
-
-  const { data: creds = [] } = useQuery({
-    queryKey: ['credentials'],
-    queryFn: getCredentials,
+  const { data: chartPoints = [] } = useQuery({
+    queryKey: ['chart', selectedPeriod, selectedExchange, customFrom, customTo],
+    queryFn: () =>
+      selectedPeriod === 'custom'
+        ? getPortfolioChart('7d', selectedExchange || 'all', customFrom, customTo)
+        : getPortfolioChart(selectedPeriod, selectedExchange || 'all'),
+    enabled: selectedPeriod !== 'custom' || (customFrom !== '' && customTo !== ''),
   })
 
   // HTTP fallback для топ символів (якщо WS ще не підключений)
@@ -110,7 +149,7 @@ export default function Dashboard() {
     mutationFn: fullSync,
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: ['summary'] })
-      void qc.invalidateQueries({ queryKey: ['snapshots'] })
+      void qc.invalidateQueries({ queryKey: ['chart'] })
       void qc.invalidateQueries({ queryKey: ['portfolio'] })
       setSyncError('')
     },
@@ -131,14 +170,12 @@ export default function Dashboard() {
     : positions
   const unrealizedPnl = filteredPositions.reduce((acc, p) => acc + p.pnl, 0)
 
-  const totalValue = spotValue + unrealizedPnl
+  const totalValue = spotValue
   const openCount = filteredPositions.length
   const totalPnl = summary?.total_realized_pnl ?? 0
   const winRate = summary?.winrate ?? 0
 
   // ── Live Spot Prices ────────────────────────────────────────────────────────
-  const exchangeNames = [...new Set(creds.map((c) => c.exchange))]
-
   const filteredPriceMap =
     selectedExchange && spotPricesByExchange[selectedExchange]
       ? spotPricesByExchange[selectedExchange]
@@ -175,9 +212,12 @@ export default function Dashboard() {
           .map(([sym, price]) => [sym, price, false] as [string, number, boolean])
 
   // ── Chart ───────────────────────────────────────────────────────────────────
-  const chartData = snapshots.map((s) => ({
-    date: fmtDate(s.snapshot_date),
-    value: s.total_value,
+  // Downsample: 1d→96 pts (15-min), 7d→168 pts (hourly), else→180 pts
+  const maxPoints = selectedPeriod === '1d' ? 96 : selectedPeriod === '7d' ? 168 : 180
+  const sampledPoints = downsample(chartPoints, maxPoints)
+  const chartData = sampledPoints.map((p) => ({
+    date: fmtChartLabel(p.recorded_at, selectedPeriod),
+    value: p.value,
   }))
 
   return (
@@ -201,30 +241,17 @@ export default function Dashboard() {
 
         {/* Global filters + sync */}
         <div className="flex items-center gap-2 flex-wrap">
-          {/* Exchange selector */}
-          {exchangeNames.length > 0 && (
-            <select
-              value={selectedExchange}
-              onChange={(e) => setSelectedExchange(e.target.value)}
-              className="text-xs bg-slate-700 border border-slate-600 text-slate-300 rounded-lg px-3 py-2 focus:outline-none focus:border-blue-500"
-            >
-              <option value="">All Exchanges</option>
-              {exchangeNames.map((ex) => (
-                <option key={ex} value={ex}>
-                  {ex.charAt(0).toUpperCase() + ex.slice(1)}
-                </option>
-              ))}
-            </select>
-          )}
+          {/* Account / exchange selector */}
+          <ExchangeSelector value={selectedExchange} onChange={setSelectedExchange} />
 
           {/* Period selector */}
           <div className="flex bg-slate-700 border border-slate-600 rounded-lg overflow-hidden">
             {PERIOD_OPTIONS.map((opt) => (
               <button
-                key={opt.label}
-                onClick={() => setSelectedDays(opt.days)}
+                key={opt.key}
+                onClick={() => setSelectedPeriod(opt.key)}
                 className={`px-3 py-2 text-xs font-medium transition-colors ${
-                  selectedDays === opt.days
+                  selectedPeriod === opt.key
                     ? 'bg-blue-600 text-white'
                     : 'text-slate-400 hover:text-white hover:bg-slate-600'
                 }`}
@@ -233,6 +260,34 @@ export default function Dashboard() {
               </button>
             ))}
           </div>
+
+          {/* Custom date range */}
+          {selectedPeriod === 'custom' && (
+            <div className="flex items-center gap-2">
+              <CalendarDays size={13} className="text-slate-400" />
+              <input
+                type="date"
+                value={customFrom ? customFrom.slice(0, 10) : ''}
+                onChange={(e) => setCustomFrom(e.target.value ? e.target.value + 'T00:00:00Z' : '')}
+                className="text-xs bg-slate-700 border border-slate-600 text-slate-300 rounded-lg px-2 py-2 focus:outline-none focus:border-blue-500"
+              />
+              <span className="text-slate-500 text-xs">—</span>
+              <input
+                type="date"
+                value={customTo ? customTo.slice(0, 10) : ''}
+                onChange={(e) => setCustomTo(e.target.value ? e.target.value + 'T23:59:59Z' : '')}
+                className="text-xs bg-slate-700 border border-slate-600 text-slate-300 rounded-lg px-2 py-2 focus:outline-none focus:border-blue-500"
+              />
+              {(customFrom || customTo) && (
+                <button
+                  onClick={() => { setCustomFrom(''); setCustomTo('') }}
+                  className="text-slate-400 hover:text-white"
+                >
+                  <X size={13} />
+                </button>
+              )}
+            </div>
+          )}
 
           {syncError && <p className="text-xs text-red-400">{syncError}</p>}
           <button
@@ -257,7 +312,7 @@ export default function Dashboard() {
           label="Total Realized PnL"
           value={fmt$(totalPnl)}
           positive={totalPnl >= 0}
-          sub={selectedDays > 0 ? `Last ${selectedDays}d` : 'All time'}
+          sub={summaryDays > 0 ? `Last ${summaryDays}d` : 'All time'}
         />
         <StatCard
           label="Win Rate"
@@ -337,11 +392,18 @@ export default function Dashboard() {
         {/* Portfolio value chart */}
         <div className="bg-slate-800 rounded-xl border border-slate-700 p-5">
           <h2 className="font-semibold text-white text-sm mb-4">
-            Portfolio Value ({selectedDays > 0 ? `${selectedDays}d` : 'All time'})
+            Portfolio Value
+            {selectedPeriod === 'custom' && customFrom && customTo
+              ? ` (${customFrom.slice(0,10)} – ${customTo.slice(0,10)})`
+              : ` (${PERIOD_OPTIONS.find(p => p.key === selectedPeriod)?.label ?? ''})`}
           </h2>
-          {chartData.length === 0 ? (
-            <div className="flex items-center justify-center h-48 text-slate-500 text-sm">
-              No snapshot data yet.
+          {chartData.length < 2 ? (
+            <div className="flex flex-col items-center justify-center h-48 gap-2 text-center px-4">
+              <p className="text-slate-400 text-sm font-medium">Not enough data yet</p>
+              {chartData.length === 0
+                ? <p className="text-slate-500 text-xs">Click «Sync All» to record your first snapshot. Chart will populate within 15 minutes.</p>
+                : <p className="text-slate-500 text-xs">One more snapshot needed — chart updates every 15 minutes.</p>
+              }
             </div>
           ) : (
             <ResponsiveContainer width="100%" height={220}>
@@ -357,7 +419,10 @@ export default function Dashboard() {
                   tick={{ fill: '#94a3b8', fontSize: 11 }}
                   tickLine={false}
                   axisLine={false}
-                  tickFormatter={(v: number | string) => `$${(Number(v) / 1000).toFixed(0)}k`}
+                  tickFormatter={(v: number | string) => {
+                    const n = Number(v)
+                    return n >= 1000 ? `$${(n / 1000).toFixed(1)}k` : `$${n.toFixed(0)}`
+                  }}
                 />
                 <Tooltip
                   contentStyle={{
