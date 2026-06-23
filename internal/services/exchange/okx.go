@@ -223,26 +223,87 @@ func (o *OKX) GetOpenPositions(creds Credentials) ([]Position, error) {
 // --- Closed Trades ---
 
 func (o *OKX) GetClosedTrades(creds Credentials, startMs, endMs int64) ([]ClosedTrade, error) {
+	type posHistItem struct {
+		InstId        string `json:"instId"`
+		PosSide       string `json:"posSide"`
+		MgnMode       string `json:"mgnMode"`
+		CloseTotalPos string `json:"closeTotalPos"`
+		OpenAvgPx     string `json:"openAvgPx"`
+		CloseAvgPx    string `json:"closeAvgPx"`
+		RealizedPnl   string `json:"realizedPnl"`
+		Fee           string `json:"fee"`
+		CTime         string `json:"cTime"`
+		UTime         string `json:"uTime"`
+		Lever         string `json:"lever"`
+		NotionalUsd   string `json:"notionalUsd"`
+	}
 	var resp struct {
-		Code string `json:"code"`
-		Data []struct {
-			InstId        string `json:"instId"`
-			PosSide       string `json:"posSide"`
-			CloseTotalPos string `json:"closeTotalPos"`
-			OpenAvgPx     string `json:"openAvgPx"`
-			CloseAvgPx    string `json:"closeAvgPx"`
-			RealizedPnl   string `json:"realizedPnl"`
-			CTime         string `json:"cTime"`
-			UTime         string `json:"uTime"`
-			Lever         string `json:"lever"`
-		} `json:"data"`
+		Code string        `json:"code"`
+		Data []posHistItem `json:"data"`
 	}
 
-	if err := o.get("/api/v5/account/positions-history", nil, creds, &resp); err != nil {
+	if err := o.get("/api/v5/account/positions-history", map[string]string{"limit": "100"}, creds, &resp); err != nil {
 		return nil, fmt.Errorf("okx history: %w", err)
 	}
 	if resp.Code != "0" {
 		return nil, nil
+	}
+
+	// For items where OKX returned lever="0" (common for cross-margin history),
+	// fall back to fetching the current leverage setting per instrument.
+	type instMgn struct{ instId, mgnMode string }
+	needsLever := map[instMgn]bool{}
+	for _, item := range resp.Data {
+		if parseFloat(item.Lever) == 0 && item.InstId != "" {
+			mgnMode := item.MgnMode
+			if mgnMode == "" {
+				mgnMode = "cross"
+			}
+			needsLever[instMgn{item.InstId, mgnMode}] = true
+		}
+	}
+	// Batch fetch leverage-info for each unique instId/mgnMode pair
+	leverageByInst := make(map[instMgn]int, len(needsLever))
+	for k := range needsLever {
+		var levResp struct {
+			Code string `json:"code"`
+			Data []struct {
+				Lever string `json:"lever"`
+			} `json:"data"`
+		}
+		if err := o.get("/api/v5/account/leverage-info", map[string]string{
+			"instId":  k.instId,
+			"mgnMode": k.mgnMode,
+		}, creds, &levResp); err == nil && levResp.Code == "0" && len(levResp.Data) > 0 {
+			if lev := int(parseFloat(levResp.Data[0].Lever)); lev > 0 {
+				leverageByInst[k] = lev
+			}
+		}
+	}
+
+	// Batch fetch ctVal (contract size) for instruments where notionalUsd is missing.
+	// OKX qty in positions-history is in contracts, not in the underlying asset.
+	// notional = qty_contracts × ctVal × price
+	needsCtVal := map[string]bool{}
+	for _, item := range resp.Data {
+		if parseFloat(item.NotionalUsd) == 0 && item.InstId != "" {
+			needsCtVal[item.InstId] = true
+		}
+	}
+	ctValByInst := make(map[string]float64, len(needsCtVal))
+	for instId := range needsCtVal {
+		var instrResp struct {
+			Code string `json:"code"`
+			Data []struct {
+				CtVal string `json:"ctVal"`
+			} `json:"data"`
+		}
+		url := okxBaseURL + "/api/v5/public/instruments?instType=SWAP&instId=" + instId
+		if err := getPublic(url, &instrResp); err == nil && instrResp.Code == "0" && len(instrResp.Data) > 0 {
+			if cv := parseFloat(instrResp.Data[0].CtVal); cv > 0 {
+				ctValByInst[instId] = cv
+			}
+		}
 	}
 
 	var result []ClosedTrade
@@ -260,14 +321,43 @@ func (o *OKX) GetClosedTrades(creds Credentials, startMs, endMs int64) ([]Closed
 		if closedMs < startMs || closedMs > endMs {
 			continue
 		}
+		fee := parseFloat(item.Fee)
+		if fee < 0 {
+			fee = -fee // OKX returns fees as negative values
+		}
+
+		lever := int(parseFloat(item.Lever))
+		if lever == 0 {
+			mgnMode := item.MgnMode
+			if mgnMode == "" {
+				mgnMode = "cross"
+			}
+			if lev, ok := leverageByInst[instMgn{item.InstId, mgnMode}]; ok {
+				lever = lev
+			}
+		}
+
+		notionalUsd := parseFloat(item.NotionalUsd)
+		if notionalUsd == 0 {
+			// qty is in contracts; multiply by contract size to get underlying amount
+			ctVal := ctValByInst[item.InstId]
+			if ctVal == 0 {
+				ctVal = 1
+			}
+			notionalUsd = math.Abs(qty) * ctVal * parseFloat(item.OpenAvgPx)
+		}
 		result = append(result, ClosedTrade{
-			Symbol:     normalizeSymbol(item.InstId),
-			Side:       side,
-			Quantity:   math.Abs(qty),
-			EntryPrice: parseFloat(item.OpenAvgPx),
-			ClosePrice: parseFloat(item.CloseAvgPx),
-			PnL:        parseFloat(item.RealizedPnl),
-			ClosedAt:   closedMs,
+			Symbol:      normalizeSymbol(item.InstId),
+			Side:        side,
+			Quantity:    math.Abs(qty),
+			EntryPrice:  parseFloat(item.OpenAvgPx),
+			ClosePrice:  parseFloat(item.CloseAvgPx),
+			PnL:         parseFloat(item.RealizedPnl),
+			Leverage:    lever,
+			Fee:         fee,
+			NotionalUsd: notionalUsd,
+			OpenedAt:    parseInt64(item.CTime),
+			ClosedAt:    closedMs,
 		})
 	}
 	return result, nil

@@ -32,13 +32,17 @@ type Position struct {
 
 // ClosedTrade — закрита угода з PnL
 type ClosedTrade struct {
-	Symbol     string
-	Side       string
-	Quantity   float64
-	EntryPrice float64
-	ClosePrice float64
-	PnL        float64
-	ClosedAt   int64 // Unix timestamp ms
+	Symbol      string
+	Side        string
+	Quantity    float64
+	EntryPrice  float64
+	ClosePrice  float64
+	PnL         float64
+	Leverage    int     // кредитне плече (0 = невідомо / спот)
+	Fee         float64 // комісія (абсолютне значення USDT)
+	NotionalUsd float64 // повний розмір позиції в USD (з API; 0 = використати qty×entry)
+	OpenedAt    int64   // Unix timestamp ms, 0 = невідомо
+	ClosedAt    int64   // Unix timestamp ms
 }
 
 // SpotTrade — одна спот-угода (buy/sell)
