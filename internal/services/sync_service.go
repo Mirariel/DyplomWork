@@ -383,23 +383,37 @@ func (s *SyncService) processHistory(userID int64, trades []exchange.ClosedTrade
 	inserted := 0
 	for _, t := range trades {
 		closedAt := time.UnixMilli(t.ClosedAt).UTC().Format("2006-01-02 15:04:05")
+
 		var openedAt *string
-		if t.ClosedAt > 0 {
-			// Bybit provides opened_at via CreatedTime; для Binance/OKX залишаємо nil
+		if t.OpenedAt > 0 {
+			s := time.UnixMilli(t.OpenedAt).UTC().Format("2006-01-02 15:04:05")
+			openedAt = &s
+		}
+
+		// lev=0 means OKX returned empty/zero — store "0x" so UI can show "—"
+		// lev>0 means real leverage — store as "Nx"
+		levStr := "0x"
+		if t.Leverage > 0 {
+			levStr = fmt.Sprintf("%dx", t.Leverage)
+		}
+
+		maxSize := t.NotionalUsd
+		if maxSize == 0 {
+			maxSize = t.Quantity * t.EntryPrice
 		}
 
 		row := historyRow{
 			UserID:      userID,
 			Symbol:      t.Symbol,
 			Side:        t.Side,
-			Leverage:    "1x",
+			Leverage:    levStr,
 			MarginMode:  "cross",
 			EntryPrice:  t.EntryPrice,
 			ExitPrice:   t.ClosePrice,
 			Quantity:    t.Quantity,
 			RealizedPnl: t.PnL,
-			Fee:         0,
-			MaxSize:     t.Quantity * t.EntryPrice,
+			Fee:         t.Fee,
+			MaxSize:     maxSize,
 			OpenedAt:    openedAt,
 			ClosedAt:    closedAt,
 			Exchange:    exchangeName,

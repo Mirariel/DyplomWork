@@ -135,10 +135,20 @@ func (r *syncRepository) transferCommentsToHistory(userID int64, syncStart time.
 
 // --- History ---
 
-// insertHistory — INSERT IGNORE закритої угоди (UNIQUE KEY: user_id, symbol, closed_at, realized_pnl).
+// insertHistory — вставляє закриту угоду; при конфлікті оновлює leverage і fee.
+// "0x" = leverage невідомий (OKX повернув 0/порожньо); не перезаписуємо реальне значення нулем.
+// Якщо leverage невідомий ("0x") — намагається взяти з open_positions (поки позиція ще відкрита).
 func (r *syncRepository) insertHistory(h historyRow) error {
+	if h.Leverage == "0x" {
+		var lev string
+		if err := r.db.Get(&lev,
+			`SELECT leverage FROM open_positions WHERE user_id = ? AND symbol = ? LIMIT 1`,
+			h.UserID, h.Symbol); err == nil && lev != "" && lev != "0x" && lev != "1x" {
+			h.Leverage = lev
+		}
+	}
 	_, err := r.db.NamedExec(`
-		INSERT IGNORE INTO position_history
+		INSERT INTO position_history
 			(user_id, symbol, side, leverage, margin_mode,
 			 entry_price, exit_price, quantity, realized_pnl,
 			 fee, max_size, opened_at, closed_at, exchange)
@@ -146,6 +156,11 @@ func (r *syncRepository) insertHistory(h historyRow) error {
 			(:user_id, :symbol, :side, :leverage, :margin_mode,
 			 :entry_price, :exit_price, :quantity, :realized_pnl,
 			 :fee, :max_size, :opened_at, :closed_at, :exchange)
+		ON DUPLICATE KEY UPDATE
+			leverage = IF(VALUES(leverage) != '0x', VALUES(leverage), leverage),
+			fee      = IF(VALUES(fee) > 0,          VALUES(fee),      fee),
+			opened_at = IF(opened_at IS NULL AND VALUES(opened_at) IS NOT NULL, VALUES(opened_at), opened_at),
+			max_size = VALUES(max_size)
 	`, h)
 	return err
 }
