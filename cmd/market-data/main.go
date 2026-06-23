@@ -78,7 +78,7 @@ func main() {
 	syncService      := services.NewSyncService(db, enc, logger)
 	priceService     := services.NewPriceService(db, priceStore, logger)
 	snapshotRepo     := models.NewSnapshotRepository(db)
-	analyticsService := services.NewAnalyticsService(db, snapshotRepo, logger)
+	analyticsService := services.NewAnalyticsService(db, snapshotRepo, priceService, logger)
 
 	// NATS — publish price updates so trading can trigger smart-order checks
 	bus, err := natspkg.Connect(cfg.NatsURL, logger)

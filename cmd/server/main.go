@@ -89,12 +89,12 @@ func main() {
 	priceService := services.NewPriceService(db, priceStore, logger)
 	smartOrderService := services.NewSmartOrderService(db, smartOrderRepo, orderRepo, portfolioRepo, priceService, enc, notifier, logger)
 	botService := services.NewBotService(botRepo, portfolioRepo, enc, logger)
-	analyticsService := services.NewAnalyticsService(db, snapshotRepo, logger)
+	analyticsService := services.NewAnalyticsService(db, snapshotRepo, priceService, logger)
 	dcaService := services.NewDCAService(dcaBotRepo, portfolioRepo, priceService, enc, notifier, logger)
 
 	// WebSocket
 	hub := ws.NewHub()
-	wsServer := ws.NewServer(hub, db, enc, priceService, cfg.JWTSecret, logger)
+	wsServer := ws.NewServer(hub, db, enc, priceService, nil, cfg.JWTSecret, logger)
 
 	// Контекст для WS broadcast loop і scheduler
 	ctx, cancel := context.WithCancel(context.Background())
@@ -163,7 +163,7 @@ func main() {
 	// Handlers
 	authHandler := handlers.NewAuthHandler(userRepo, cfg.JWTSecret)
 	portfolioHandler := handlers.NewPortfolioHandler(portfolioRepo, enc)
-	syncHandler := handlers.NewSyncHandler(syncService, priceService, portfolioRepo)
+	syncHandler := handlers.NewSyncHandler(syncService, priceService, portfolioRepo, analyticsService)
 	orderHandler := handlers.NewOrderHandler(orderRepo, portfolioRepo, enc, logger)
 	smartOrderHandler := handlers.NewSmartOrderHandler(smartOrderRepo)
 	botHandler := handlers.NewBotHandler(botRepo, botService, priceService)
@@ -258,9 +258,10 @@ func main() {
 
 	// Analytics
 	analyticsGroup := api.Group("/analytics")
-	analyticsGroup.Get("/summary", analyticsHandler.Summary)
-	analyticsGroup.Get("/coins", analyticsHandler.Coins)
+	analyticsGroup.Get("/summary",   analyticsHandler.Summary)
+	analyticsGroup.Get("/coins",     analyticsHandler.Coins)
 	analyticsGroup.Get("/snapshots", analyticsHandler.Snapshots)
+	analyticsGroup.Get("/chart",     analyticsHandler.Chart)
 	analyticsGroup.Post("/snapshot", analyticsHandler.TakeSnapshot)
 	analyticsGroup.Get("/arbitrage", analyticsHandler.Arbitrage)
 

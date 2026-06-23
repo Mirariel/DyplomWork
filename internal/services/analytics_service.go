@@ -16,18 +16,20 @@ import (
 // AnalyticsService — генерує portfolio snapshots, статистику торгівлі та arbitrage сканер.
 //
 // TakeAllSnapshots — викликати щогодини через scheduler.
-// Snapshot розраховується з live-даних БД (user_portfolios + open_positions).
+// Snapshot розраховується з live-цін кешу (PriceService), fallback → DB current_price.
 type AnalyticsService struct {
 	db        *sqlx.DB
 	snapshots *models.SnapshotRepository
+	prices    *PriceService // nil → fallback to DB current_price
 	exchanges map[string]exchange.Exchange
 	logger    *slog.Logger
 }
 
-func NewAnalyticsService(db *sqlx.DB, snapshots *models.SnapshotRepository, logger *slog.Logger) *AnalyticsService {
+func NewAnalyticsService(db *sqlx.DB, snapshots *models.SnapshotRepository, prices *PriceService, logger *slog.Logger) *AnalyticsService {
 	return &AnalyticsService{
 		db:        db,
 		snapshots: snapshots,
+		prices:    prices,
 		exchanges: exchange.Registry(),
 		logger:    logger,
 	}
@@ -42,54 +44,94 @@ func (s *AnalyticsService) TakeAllSnapshots(ctx context.Context) {
 	if err != nil || len(userIDs) == 0 {
 		return
 	}
-	today := time.Now().Format("2006-01-02")
+	at := time.Now().UTC()
 	for _, uid := range userIDs {
 		select {
 		case <-ctx.Done():
 			return
 		default:
 		}
-		if err := s.takeSnapshot(uid, today); err != nil {
+		if err := s.takeSnapshot(uid, at); err != nil {
 			s.logger.Error("analytics: snapshot failed", "user_id", uid, "error", err)
 		}
 	}
 }
 
-// TakeSnapshotForUser записує snapshot для конкретного користувача прямо зараз.
-// Викликається вручну через ендпоінт (для тесту без чекання scheduler).
+// TakeSnapshotForUser записує snapshot для конкретного користувача прямо зараз (точний timestamp).
 func (s *AnalyticsService) TakeSnapshotForUser(userID int64) error {
-	today := time.Now().Format("2006-01-02")
-	return s.takeSnapshot(userID, today)
+	at := time.Now().UTC()
+	return s.takeSnapshot(userID, at)
 }
 
-func (s *AnalyticsService) takeSnapshot(userID int64, date string) error {
-	// Сума спот-активів: кількість * поточна ціна
-	var spotValue float64
-	if err := s.db.Get(&spotValue, `
-		SELECT COALESCE(SUM(up.quantity * a.current_price), 0)
+func (s *AnalyticsService) takeSnapshot(userID int64, at time.Time) error {
+	spotByExchange, err := s.calcSpotValueByExchange(userID)
+	if err != nil {
+		return err
+	}
+
+	if len(spotByExchange) == 0 {
+		// Немає активів — зберігаємо нульовий snapshot щоб уникнути прогалин
+		return s.snapshots.Upsert(&models.PortfolioSnapshot{
+			UserID: userID, Exchange: "all", SnapshotAt: at,
+		})
+	}
+
+	for exName, spotValue := range spotByExchange {
+		var futuresPnl float64
+		if err := s.db.Get(&futuresPnl, `
+			SELECT COALESCE(SUM(pnl), 0) FROM open_positions
+			WHERE user_id = ? AND exchange = ?`, userID, exName,
+		); err != nil {
+			return err
+		}
+		snap := &models.PortfolioSnapshot{
+			UserID:     userID,
+			Exchange:   exName,
+			SpotValue:  spotValue,
+			FuturesPnl: futuresPnl,
+			TotalValue: spotValue, // тільки спот, futures PnL окремо
+			SnapshotAt: at,
+		}
+		if err := s.snapshots.Upsert(snap); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// calcSpotValueByExchange повертає карту exchange → spot value для всіх активів користувача.
+// Пріоритет: live ціни з Redis → DB current_price.
+func (s *AnalyticsService) calcSpotValueByExchange(userID int64) (map[string]float64, error) {
+	type assetRow struct {
+		Exchange     string  `db:"exchange"`
+		Symbol       string  `db:"symbol"`
+		Quantity     float64 `db:"quantity"`
+		CurrentPrice float64 `db:"current_price"`
+	}
+	var assets []assetRow
+	if err := s.db.Select(&assets, `
+		SELECT up.exchange, a.symbol, up.quantity, a.current_price
 		FROM user_portfolios up
 		JOIN assets a ON a.id = up.asset_id
-		WHERE up.user_id = ? AND a.current_price > 0`, userID,
+		WHERE up.user_id = ?`, userID,
 	); err != nil {
-		return err
+		return nil, err
 	}
 
-	// Нереалізований PnL відкритих позицій
-	var futuresPnl float64
-	if err := s.db.Get(&futuresPnl, `
-		SELECT COALESCE(SUM(pnl), 0) FROM open_positions WHERE user_id = ?`, userID,
-	); err != nil {
-		return err
+	var livePrices map[string]float64
+	if s.prices != nil {
+		livePrices = s.prices.GetLivePrices(nil)
 	}
 
-	snap := &models.PortfolioSnapshot{
-		UserID:       userID,
-		SpotValue:    spotValue,
-		FuturesPnl:   futuresPnl,
-		TotalValue:   spotValue + futuresPnl,
-		SnapshotDate: date,
+	result := make(map[string]float64)
+	for _, a := range assets {
+		price := a.CurrentPrice
+		if live, ok := livePrices[a.Symbol]; ok && live > 0 {
+			price = live
+		}
+		result[a.Exchange] += a.Quantity * price
 	}
-	return s.snapshots.Upsert(snap)
+	return result, nil
 }
 
 // --- Trading Analytics ---
@@ -99,7 +141,7 @@ type TradeSummary struct {
 	TotalTrades      int     `json:"total_trades"`
 	WinningTrades    int     `json:"winning_trades"`
 	LosingTrades     int     `json:"losing_trades"`
-	Winrate          float64 `json:"winrate"`           // відсоток
+	Winrate          float64 `json:"winrate"`            // відсоток
 	TotalRealizedPnl float64 `json:"total_realized_pnl"`
 	AvgPnl           float64 `json:"avg_pnl"`
 	BestTrade        float64 `json:"best_trade"`
@@ -107,12 +149,14 @@ type TradeSummary struct {
 	AvgWin           float64 `json:"avg_win"`
 	AvgLoss          float64 `json:"avg_loss"`
 	ProfitFactor     float64 `json:"profit_factor"` // gross_profit / abs(gross_loss)
+	TotalFees        float64 `json:"total_fees"`    // сумарна комісія за угодами
 }
 
 // GetTradeSummary повертає статистику по закритих угодах.
-// days=0 означає all time; days>0 — фільтр за останні N днів.
-// exchange="" — всі біржі; exchange="binance" — тільки вказана.
-func (s *AnalyticsService) GetTradeSummary(userID int64, days int, exchange string) (TradeSummary, error) {
+// days=0 — без ліміту по часу; days>0 — останні N днів.
+// from/to — конкретний діапазон дат (YYYY-MM-DD); мають пріоритет над days.
+// exchange="" — всі біржі.
+func (s *AnalyticsService) GetTradeSummary(userID int64, days int, exchange, from, to string) (TradeSummary, error) {
 	type row struct {
 		TotalTrades      int     `db:"total_trades"`
 		WinningTrades    int     `db:"winning_trades"`
@@ -124,11 +168,22 @@ func (s *AnalyticsService) GetTradeSummary(userID int64, days int, exchange stri
 		AvgLoss          float64 `db:"avg_loss"`
 		GrossProfit      float64 `db:"gross_profit"`
 		GrossLoss        float64 `db:"gross_loss"`
+		TotalFees        float64 `db:"total_fees"`
 	}
 	var r row
 	filters := ""
 	args := []interface{}{userID}
-	if days > 0 {
+
+	// date range has priority over days
+	if from != "" {
+		filters += " AND closed_at >= ?"
+		args = append(args, from+" 00:00:00")
+	}
+	if to != "" {
+		filters += " AND closed_at <= ?"
+		args = append(args, to+" 23:59:59")
+	}
+	if from == "" && to == "" && days > 0 {
 		filters += " AND closed_at >= DATE_SUB(NOW(), INTERVAL ? DAY)"
 		args = append(args, days)
 	}
@@ -138,16 +193,17 @@ func (s *AnalyticsService) GetTradeSummary(userID int64, days int, exchange stri
 	}
 	err := s.db.Get(&r, `
 		SELECT
-		    COUNT(*)                                                        AS total_trades,
-		    COALESCE(SUM(CASE WHEN realized_pnl > 0 THEN 1 ELSE 0 END), 0) AS winning_trades,
-		    COALESCE(SUM(realized_pnl), 0)                                 AS total_realized_pnl,
-		    COALESCE(AVG(realized_pnl), 0)                                 AS avg_pnl,
-		    COALESCE(MAX(realized_pnl), 0)                                 AS best_trade,
-		    COALESCE(MIN(realized_pnl), 0)                                 AS worst_trade,
+		    COUNT(*)                                                            AS total_trades,
+		    COALESCE(SUM(CASE WHEN realized_pnl > 0 THEN 1 ELSE 0 END), 0)     AS winning_trades,
+		    COALESCE(SUM(realized_pnl), 0)                                     AS total_realized_pnl,
+		    COALESCE(AVG(realized_pnl), 0)                                     AS avg_pnl,
+		    COALESCE(MAX(realized_pnl), 0)                                     AS best_trade,
+		    COALESCE(MIN(realized_pnl), 0)                                     AS worst_trade,
 		    COALESCE(AVG(CASE WHEN realized_pnl > 0 THEN realized_pnl END), 0) AS avg_win,
 		    COALESCE(AVG(CASE WHEN realized_pnl < 0 THEN realized_pnl END), 0) AS avg_loss,
 		    COALESCE(SUM(CASE WHEN realized_pnl > 0 THEN realized_pnl ELSE 0 END), 0) AS gross_profit,
-		    COALESCE(SUM(CASE WHEN realized_pnl < 0 THEN realized_pnl ELSE 0 END), 0) AS gross_loss
+		    COALESCE(SUM(CASE WHEN realized_pnl < 0 THEN realized_pnl ELSE 0 END), 0) AS gross_loss,
+		    COALESCE(SUM(fee), 0)                                               AS total_fees
 		FROM position_history
 		WHERE user_id = ?`+filters, args...,
 	)
@@ -165,6 +221,7 @@ func (s *AnalyticsService) GetTradeSummary(userID int64, days int, exchange stri
 		WorstTrade:       r.WorstTrade,
 		AvgWin:           r.AvgWin,
 		AvgLoss:          r.AvgLoss,
+		TotalFees:        r.TotalFees,
 	}
 	if r.TotalTrades > 0 {
 		summary.Winrate = float64(r.WinningTrades) / float64(r.TotalTrades) * 100

@@ -55,17 +55,28 @@ func (h *PortfolioHandler) GetPortfolio(c *fiber.Ctx) error {
 	})
 }
 
-// GET /api/portfolio/history?limit=15&offset=0
+// GET /api/portfolio/history?limit=15&offset=0&from=YYYY-MM-DD&to=YYYY-MM-DD
 func (h *PortfolioHandler) GetHistory(c *fiber.Ctx) error {
 	userID := middleware.GetUserID(c)
-	limit := c.QueryInt("limit", 15)
+	limit  := c.QueryInt("limit", 15)
 	offset := c.QueryInt("offset", 0)
+	from   := c.Query("from")
+	to     := c.Query("to")
 
-	history, err := h.repo.GetHistory(userID, limit, offset)
+	history, err := h.repo.GetHistoryFiltered(userID, limit, offset, from, to)
 	if err != nil {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": err.Error()})
 	}
-	return c.JSON(history)
+	total, err := h.repo.GetHistoryFilteredCount(userID, from, to)
+	if err != nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": err.Error()})
+	}
+	return c.JSON(fiber.Map{
+		"data":   history,
+		"total":  total,
+		"limit":  limit,
+		"offset": offset,
+	})
 }
 
 // GET /api/portfolio/credentials

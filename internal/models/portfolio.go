@@ -144,6 +144,47 @@ func (r *PortfolioRepository) GetHistory(userID int64, limit, offset int) ([]Pos
 	return items, err
 }
 
+func (r *PortfolioRepository) GetHistoryCount(userID int64) (int, error) {
+	var count int
+	err := r.db.Get(&count, `SELECT COUNT(*) FROM position_history WHERE user_id = ?`, userID)
+	return count, err
+}
+
+// GetHistoryFiltered — з опціональним фільтром дат (from/to у форматі YYYY-MM-DD або порожній).
+func (r *PortfolioRepository) GetHistoryFiltered(userID int64, limit, offset int, from, to string) ([]PositionHistory, error) {
+	query := `SELECT * FROM position_history WHERE user_id = ?`
+	args := []interface{}{userID}
+	if from != "" {
+		query += ` AND closed_at >= ?`
+		args = append(args, from)
+	}
+	if to != "" {
+		query += ` AND closed_at < DATE_ADD(?, INTERVAL 1 DAY)`
+		args = append(args, to)
+	}
+	query += ` ORDER BY closed_at DESC LIMIT ? OFFSET ?`
+	args = append(args, limit, offset)
+	items := make([]PositionHistory, 0)
+	err := r.db.Select(&items, query, args...)
+	return items, err
+}
+
+func (r *PortfolioRepository) GetHistoryFilteredCount(userID int64, from, to string) (int, error) {
+	query := `SELECT COUNT(*) FROM position_history WHERE user_id = ?`
+	args := []interface{}{userID}
+	if from != "" {
+		query += ` AND closed_at >= ?`
+		args = append(args, from)
+	}
+	if to != "" {
+		query += ` AND closed_at < DATE_ADD(?, INTERVAL 1 DAY)`
+		args = append(args, to)
+	}
+	var count int
+	err := r.db.Get(&count, query, args...)
+	return count, err
+}
+
 func (r *PortfolioRepository) GetCredentials(userID int64) ([]ExternalApiCredential, error) {
 	items := make([]ExternalApiCredential, 0)
 	err := r.db.Select(&items,

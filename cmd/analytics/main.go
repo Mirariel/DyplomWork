@@ -18,7 +18,9 @@ import (
 	"github.com/gofiber/fiber/v2"
 	"github.com/gofiber/fiber/v2/middleware/recover"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
+	goredis "github.com/redis/go-redis/v9"
 
+	"github.com/okochadmytro/tradetracker/internal/cache"
 	"github.com/okochadmytro/tradetracker/internal/config"
 	"github.com/okochadmytro/tradetracker/internal/database"
 	"github.com/okochadmytro/tradetracker/internal/handlers"
@@ -50,8 +52,18 @@ func main() {
 	}
 	defer db.Close()
 
+	// PriceService для live цін при розрахунку snapshots (читає з Redis якщо доступний)
+	var priceService *services.PriceService
+	if cfg.RedisURL != "" {
+		redisClient := goredis.NewClient(&goredis.Options{Addr: cfg.RedisURL})
+		priceService = services.NewPriceService(db, cache.NewRedisPriceStore(redisClient), logger)
+		logger.Info("analytics: price cache via Redis", "url", cfg.RedisURL)
+	} else {
+		logger.Info("analytics: no Redis — snapshots use DB current_price")
+	}
+
 	snapshotRepo     := models.NewSnapshotRepository(db)
-	analyticsService := services.NewAnalyticsService(db, snapshotRepo, logger)
+	analyticsService := services.NewAnalyticsService(db, snapshotRepo, priceService, logger)
 	analyticsHandler := handlers.NewAnalyticsHandler(analyticsService, snapshotRepo)
 	aiHandler        := handlers.NewAIHandler(db, cfg.AnthropicKey)
 
@@ -62,7 +74,7 @@ func main() {
 	sched := scheduler.New(logger)
 	sched.Register(scheduler.Job{
 		Name:     "snapshots",
-		Interval: 1 * time.Hour,
+		Interval: 1 * time.Minute,
 		Fn: func(c context.Context) {
 			analyticsService.TakeAllSnapshots(c)
 		},
@@ -91,6 +103,7 @@ func main() {
 	analyticsGroup.Get("/summary",   analyticsHandler.Summary)
 	analyticsGroup.Get("/coins",     analyticsHandler.Coins)
 	analyticsGroup.Get("/snapshots", analyticsHandler.Snapshots)
+	analyticsGroup.Get("/chart",     analyticsHandler.Chart)
 	analyticsGroup.Post("/snapshot", analyticsHandler.TakeSnapshot)
 	analyticsGroup.Get("/arbitrage", analyticsHandler.Arbitrage)
 

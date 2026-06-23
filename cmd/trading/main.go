@@ -85,7 +85,7 @@ func main() {
 
 	smartOrderService := services.NewSmartOrderService(db, smartOrderRepo, orderRepo, portfolioRepo, priceService, enc, notifier, logger)
 	botService        := services.NewBotService(botRepo, portfolioRepo, enc, logger)
-	analyticsService  := services.NewAnalyticsService(db, snapshotRepo, logger)
+	analyticsService  := services.NewAnalyticsService(db, snapshotRepo, priceService, logger)
 	dcaService        := services.NewDCAService(dcaBotRepo, portfolioRepo, priceService, enc, notifier, logger)
 
 	syncService := services.NewSyncService(db, enc, logger)
