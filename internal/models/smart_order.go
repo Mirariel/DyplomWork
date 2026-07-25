@@ -11,10 +11,12 @@ import (
 type SmartOrder struct {
 	ID               int64      `db:"id"                  json:"id"`
 	UserID           int64      `db:"user_id"             json:"-"`
+	CredentialID     *int64     `db:"credential_id"       json:"credential_id,omitempty"`
 	Exchange         string     `db:"exchange"            json:"exchange"`
 	Symbol           string     `db:"symbol"              json:"symbol"`
 	Side             string     `db:"side"                json:"side"`
 	Category         string     `db:"category"            json:"category"`
+	Leverage         string     `db:"leverage"            json:"leverage"`
 	Quantity         float64    `db:"quantity"            json:"quantity"`
 	Type             string     `db:"type"                json:"type"`
 	TriggerPrice     float64    `db:"trigger_price"       json:"trigger_price"`
@@ -40,10 +42,10 @@ func NewSmartOrderRepository(db *sqlx.DB) *SmartOrderRepository {
 func (r *SmartOrderRepository) Create(o *SmartOrder) error {
 	res, err := r.db.Exec(`
 		INSERT INTO smart_orders
-		    (user_id, exchange, symbol, side, category, quantity,
+		    (user_id, credential_id, exchange, symbol, side, category, leverage, quantity,
 		     type, trigger_price, callback_rate, peak_price, status)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active')`,
-		o.UserID, o.Exchange, o.Symbol, o.Side, o.Category, o.Quantity,
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active')`,
+		o.UserID, o.CredentialID, o.Exchange, o.Symbol, o.Side, o.Category, o.Leverage, o.Quantity,
 		o.Type, o.TriggerPrice, o.CallbackRate, o.PeakPrice,
 	)
 	if err != nil {

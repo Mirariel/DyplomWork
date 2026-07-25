@@ -160,16 +160,25 @@ func (s *SmartOrderService) checkTrailing(o models.SmartOrder, price float64) (b
 
 // executeOrder розміщує market ордер на біржі і оновлює статус smart order.
 func (s *SmartOrderService) executeOrder(o models.SmartOrder) {
-	creds, err := GetUserCreds(s.portfolio, s.enc, o.UserID, o.Exchange)
+	var creds exchange.Credentials
+	var exchangeName string
+	var err error
+
+	if o.CredentialID != nil {
+		creds, exchangeName, err = GetUserCredsByID(s.portfolio, s.enc, o.UserID, *o.CredentialID)
+	} else {
+		creds, err = GetUserCreds(s.portfolio, s.enc, o.UserID, o.Exchange)
+		exchangeName = o.Exchange
+	}
 	if err != nil {
-		s.logger.Error("smart_order: no creds", "id", o.ID, "exchange", o.Exchange, "error", err)
+		s.logger.Error("smart_order: no creds", "id", o.ID, "exchange", exchangeName, "error", err)
 		_ = s.smartOrders.MarkFailed(o.ID, "no credentials: "+err.Error())
 		return
 	}
 
-	ex, ok := s.exchanges[o.Exchange]
+	ex, ok := s.exchanges[exchangeName]
 	if !ok {
-		_ = s.smartOrders.MarkFailed(o.ID, "unknown exchange: "+o.Exchange)
+		_ = s.smartOrders.MarkFailed(o.ID, "unknown exchange: "+exchangeName)
 		return
 	}
 	trader, ok := ex.(exchange.Trader)
@@ -179,14 +188,16 @@ func (s *SmartOrderService) executeOrder(o models.SmartOrder) {
 	}
 
 	dbOrder := &models.Order{
-		UserID:   o.UserID,
-		Exchange: o.Exchange,
-		Symbol:   o.Symbol,
-		Side:     o.Side,
-		Type:     "market",
-		Category: o.Category,
-		Quantity: o.Quantity,
-		Status:   "new",
+		UserID:       o.UserID,
+		CredentialID: o.CredentialID,
+		Exchange:     exchangeName,
+		Symbol:       o.Symbol,
+		Side:         o.Side,
+		Type:         "market",
+		Category:     o.Category,
+		Leverage:     o.Leverage,
+		Quantity:     o.Quantity,
+		Status:       "new",
 	}
 	if err := s.orders.Create(dbOrder); err != nil {
 		s.logger.Error("smart_order: db create failed", "id", o.ID, "error", err)
@@ -205,7 +216,7 @@ func (s *SmartOrderService) executeOrder(o models.SmartOrder) {
 		s.logger.Error("smart_order: place failed", "id", o.ID, "error", err)
 		_ = s.orders.MarkFailed(dbOrder.ID, err.Error())
 		_ = s.smartOrders.MarkFailed(o.ID, err.Error())
-		s.notifier.SmartOrderFailed(o.ID, o.Symbol, o.Exchange, err.Error())
+		s.notifier.SmartOrderFailed(o.ID, o.Symbol, exchangeName, err.Error())
 		return
 	}
 
@@ -214,8 +225,8 @@ func (s *SmartOrderService) executeOrder(o models.SmartOrder) {
 
 	s.logger.Info("smart_order: executed",
 		"smart_id", o.ID, "order_id", dbOrder.ID,
-		"exchange", o.Exchange, "symbol", o.Symbol, "side", o.Side)
+		"exchange", exchangeName, "symbol", o.Symbol, "side", o.Side)
 
-	s.notifier.SmartOrderTriggered(o.Type, o.Symbol, o.Exchange, placed.AvgPrice)
+	s.notifier.SmartOrderTriggered(o.Type, o.Symbol, exchangeName, placed.AvgPrice)
 }
 

@@ -193,21 +193,47 @@ func (r *PortfolioRepository) GetCredentials(userID int64) ([]ExternalApiCredent
 	return items, err
 }
 
+// GetCredentialByID повертає конкретний API-ключ за ID що належить user.
+func (r *PortfolioRepository) GetCredentialByID(id, userID int64) (*ExternalApiCredential, error) {
+	var c ExternalApiCredential
+	err := r.db.Get(&c,
+		`SELECT * FROM external_api_credentials WHERE id = ? AND user_id = ? AND is_active = 1`,
+		id, userID)
+	return &c, err
+}
+
+// GetCredentialsByIDs повертає кілька API-ключів за переліком ID.
+func (r *PortfolioRepository) GetCredentialsByIDs(ids []int64, userID int64) ([]ExternalApiCredential, error) {
+	if len(ids) == 0 {
+		return nil, nil
+	}
+	query, args, err := sqlx.In(
+		`SELECT * FROM external_api_credentials WHERE id IN (?) AND user_id = ? AND is_active = 1`,
+		ids, userID)
+	if err != nil {
+		return nil, err
+	}
+	query = r.db.Rebind(query)
+	items := make([]ExternalApiCredential, 0, len(ids))
+	err = r.db.Select(&items, query, args...)
+	return items, err
+}
+
 func (r *PortfolioRepository) UpsertCredential(cred *ExternalApiCredential) error {
-	_, err := r.db.NamedExec(`
+	res, err := r.db.NamedExec(`
 		INSERT INTO external_api_credentials
 			(user_id, exchange, label, api_key_hint, api_key_encrypted, api_secret_encrypted, passphrase_encrypted, is_active)
 		VALUES
 			(:user_id, :exchange, :label, :api_key_hint, :api_key_encrypted, :api_secret_encrypted, :passphrase_encrypted, :is_active)
-		ON DUPLICATE KEY UPDATE
-			label                = VALUES(label),
-			api_key_hint         = VALUES(api_key_hint),
-			api_key_encrypted    = VALUES(api_key_encrypted),
-			api_secret_encrypted = VALUES(api_secret_encrypted),
-			passphrase_encrypted = VALUES(passphrase_encrypted),
-			is_active            = VALUES(is_active)
 	`, cred)
-	return err
+	if err != nil {
+		return err
+	}
+	id, _ := res.LastInsertId()
+	if id > 0 {
+		cred.ID = id
+	}
+	return nil
 }
 
 func (r *PortfolioRepository) DeleteCredential(id, userID int64) error {

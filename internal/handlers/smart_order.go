@@ -4,41 +4,43 @@ import (
 	"github.com/gofiber/fiber/v2"
 	"github.com/okochadmytro/tradetracker/internal/middleware"
 	"github.com/okochadmytro/tradetracker/internal/models"
+	"github.com/okochadmytro/tradetracker/internal/services"
 	"github.com/okochadmytro/tradetracker/internal/validator"
 )
 
 // SmartOrderHandler — HTTP handlers для умовних ордерів (SL/TP/Trailing).
 type SmartOrderHandler struct {
 	smartOrders *models.SmartOrderRepository
+	portfolio   *models.PortfolioRepository
+	enc         *services.EncryptionService
 }
 
-func NewSmartOrderHandler(smartOrders *models.SmartOrderRepository) *SmartOrderHandler {
-	return &SmartOrderHandler{smartOrders: smartOrders}
+func NewSmartOrderHandler(
+	smartOrders *models.SmartOrderRepository,
+	portfolio *models.PortfolioRepository,
+	enc *services.EncryptionService,
+) *SmartOrderHandler {
+	return &SmartOrderHandler{
+		smartOrders: smartOrders,
+		portfolio:   portfolio,
+		enc:         enc,
+	}
 }
 
 // createSmartOrderRequest — тіло POST /api/smart-orders
 type createSmartOrderRequest struct {
-	Exchange     string  `json:"exchange"      validate:"required,oneof=binance okx bybit"`
-	Symbol       string  `json:"symbol"        validate:"required,min=2,max=10"`
+	CredentialID int64   `json:"credential_id" validate:"required,gt=0"`
+	Symbol       string  `json:"symbol"        validate:"required,min=2"`
 	Side         string  `json:"side"          validate:"required,oneof=buy sell"`
 	Category     string  `json:"category"      validate:"required,oneof=spot futures"`
+	Leverage     string  `json:"leverage"`
 	Quantity     float64 `json:"quantity"      validate:"required,gt=0"`
 	Type         string  `json:"type"          validate:"required,oneof=stop_loss take_profit trailing_stop"`
-	TriggerPrice float64 `json:"trigger_price"` // потрібен для stop_loss/take_profit
-	CallbackRate float64 `json:"callback_rate"` // потрібен для trailing_stop (у відсотках)
+	TriggerPrice float64 `json:"trigger_price"`
+	CallbackRate float64 `json:"callback_rate"`
 }
 
 // POST /api/smart-orders — створити умовний ордер
-//
-// Приклад (Stop-Loss):
-//
-//	{ "exchange":"binance","symbol":"BTC","side":"sell","category":"spot",
-//	  "quantity":0.001,"type":"stop_loss","trigger_price":60000 }
-//
-// Приклад (Trailing Stop):
-//
-//	{ "exchange":"binance","symbol":"BTC","side":"sell","category":"spot",
-//	  "quantity":0.001,"type":"trailing_stop","callback_rate":1.5 }
 func (h *SmartOrderHandler) Create(c *fiber.Ctx) error {
 	userID := middleware.GetUserID(c)
 
@@ -66,12 +68,28 @@ func (h *SmartOrderHandler) Create(c *fiber.Ctx) error {
 		}
 	}
 
+	// Знаходимо credentials за ID щоб визначити біржу
+	cred, err := h.portfolio.GetCredentialByID(req.CredentialID, userID)
+	if err != nil {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+			"error": "credentials not found or inactive",
+		})
+	}
+
+	leverage := req.Leverage
+	if req.Category == "spot" {
+		leverage = ""
+	}
+
+	credID := req.CredentialID
 	o := &models.SmartOrder{
 		UserID:       userID,
-		Exchange:     req.Exchange,
+		CredentialID: &credID,
+		Exchange:     cred.Exchange,
 		Symbol:       req.Symbol,
 		Side:         req.Side,
 		Category:     req.Category,
+		Leverage:     leverage,
 		Quantity:     req.Quantity,
 		Type:         req.Type,
 		TriggerPrice: req.TriggerPrice,

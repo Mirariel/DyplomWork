@@ -10,12 +10,14 @@ import (
 type Order struct {
 	ID               int64      `db:"id"                 json:"id"`
 	UserID           int64      `db:"user_id"            json:"-"`
+	CredentialID     *int64     `db:"credential_id"      json:"credential_id,omitempty"`
 	Exchange         string     `db:"exchange"           json:"exchange"`
 	ExchangeOrderID  string     `db:"exchange_order_id"  json:"exchange_order_id"`
 	Symbol           string     `db:"symbol"             json:"symbol"`
 	Side             string     `db:"side"               json:"side"`
 	Type             string     `db:"type"               json:"type"`
 	Category         string     `db:"category"           json:"category"`
+	Leverage         string     `db:"leverage"           json:"leverage"`
 	Quantity         float64    `db:"quantity"           json:"quantity"`
 	Price            float64    `db:"price"              json:"price"`
 	FilledQty        float64    `db:"filled_qty"         json:"filled_qty"`
@@ -39,10 +41,10 @@ func NewOrderRepository(db *sqlx.DB) *OrderRepository {
 func (r *OrderRepository) Create(o *Order) error {
 	res, err := r.db.Exec(`
 		INSERT INTO orders
-		    (user_id, exchange, exchange_order_id, symbol, side, type, category,
+		    (user_id, credential_id, exchange, exchange_order_id, symbol, side, type, category, leverage,
 		     quantity, price, filled_qty, avg_price, status, error_message)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		o.UserID, o.Exchange, o.ExchangeOrderID, o.Symbol, o.Side, o.Type, o.Category,
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		o.UserID, o.CredentialID, o.Exchange, o.ExchangeOrderID, o.Symbol, o.Side, o.Type, o.Category, o.Leverage,
 		o.Quantity, o.Price, o.FilledQty, o.AvgPrice, o.Status, o.ErrorMessage,
 	)
 	if err != nil {
@@ -97,4 +99,21 @@ func (r *OrderRepository) MarkFailed(id int64, errMsg string) error {
 		errMsg, id,
 	)
 	return err
+}
+
+// ListByCredentialIDs повертає ордери за переліком credential_id.
+func (r *OrderRepository) ListByCredentialIDs(userID int64, credIDs []int64) ([]Order, error) {
+	if len(credIDs) == 0 {
+		return nil, nil
+	}
+	query, args, err := sqlx.In(
+		`SELECT * FROM orders WHERE user_id = ? AND credential_id IN (?) ORDER BY created_at DESC LIMIT 100`,
+		userID, credIDs)
+	if err != nil {
+		return nil, err
+	}
+	query = r.db.Rebind(query)
+	orders := make([]Order, 0)
+	err = r.db.Select(&orders, query, args...)
+	return orders, err
 }

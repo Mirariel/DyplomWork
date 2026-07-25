@@ -79,6 +79,7 @@ func main() {
 	dcaBotRepo       := models.NewDCABotRepository(db)
 	futuresRepo      := models.NewFuturesPositionRepository(db)
 	spotTradeRepo    := models.NewSpotTradeRepository(db)
+	credGroupRepo    := models.NewCredentialGroupRepository(db)
 
 	notifier    := notify.New(cfg.TelegramToken, cfg.TelegramChatID, logger)
 	priceService := services.NewPriceService(db, priceStore, logger)
@@ -98,11 +99,12 @@ func main() {
 		}
 	})
 	orderHandler      := handlers.NewOrderHandler(orderRepo, portfolioRepo, enc, logger)
-	smartOrderHandler := handlers.NewSmartOrderHandler(smartOrderRepo)
+	smartOrderHandler := handlers.NewSmartOrderHandler(smartOrderRepo, portfolioRepo, enc)
 	botHandler        := handlers.NewBotHandler(botRepo, botService, priceService)
 	dcaHandler        := handlers.NewDCAHandler(dcaBotRepo, dcaService)
 	futuresHandler    := handlers.NewFuturesHandler(futuresRepo)
 	spotTradesHandler := handlers.NewSpotTradesHandler(spotTradeRepo)
+	credGroupHandler  := handlers.NewCredentialGroupHandler(credGroupRepo)
 
 	// ── NATS: subscribe to price updates → trigger smart-order checks ─────────
 	bus, err := natspkg.Connect(cfg.NatsURL, logger)
@@ -219,6 +221,12 @@ func main() {
 	api.Get("/smart-orders",       smartOrderHandler.List)
 	api.Get("/smart-orders/:id",   smartOrderHandler.Get)
 	api.Delete("/smart-orders/:id", smartOrderHandler.Cancel)
+
+	// Credential Groups
+	api.Post("/credential-groups",              credGroupHandler.Create)
+	api.Get("/credential-groups",               credGroupHandler.List)
+	api.Delete("/credential-groups/:id",        credGroupHandler.Delete)
+	api.Put("/credential-groups/:id/members",   credGroupHandler.SetMembers)
 
 	// Grid Bots
 	api.Post("/bots",          botHandler.Create)

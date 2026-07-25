@@ -41,3 +41,33 @@ func GetUserCreds(
 	}
 	return exchange.Credentials{}, exchange.ErrNoCredentials
 }
+
+// GetUserCredsByID знаходить і розшифровує API credentials за credential ID.
+func GetUserCredsByID(
+	portfolio *models.PortfolioRepository,
+	enc *EncryptionService,
+	userID int64,
+	credentialID int64,
+) (exchange.Credentials, string, error) {
+	c, err := portfolio.GetCredentialByID(credentialID, userID)
+	if err != nil {
+		return exchange.Credentials{}, "", err
+	}
+	apiKey, err := enc.Decrypt(c.ApiKeyEncrypted)
+	if err != nil {
+		return exchange.Credentials{}, "", err
+	}
+	apiSecret, err := enc.Decrypt(c.ApiSecretEncrypted)
+	if err != nil {
+		return exchange.Credentials{}, "", err
+	}
+	passphrase := ""
+	if c.PassphraseEncrypted != nil {
+		passphrase, _ = enc.Decrypt(*c.PassphraseEncrypted)
+	}
+	return exchange.Credentials{
+		APIKey:     apiKey,
+		APISecret:  apiSecret,
+		Passphrase: passphrase,
+	}, c.Exchange, nil
+}

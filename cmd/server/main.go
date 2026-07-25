@@ -165,7 +165,7 @@ func main() {
 	portfolioHandler := handlers.NewPortfolioHandler(portfolioRepo, enc)
 	syncHandler := handlers.NewSyncHandler(syncService, priceService, portfolioRepo, analyticsService)
 	orderHandler := handlers.NewOrderHandler(orderRepo, portfolioRepo, enc, logger)
-	smartOrderHandler := handlers.NewSmartOrderHandler(smartOrderRepo)
+	smartOrderHandler := handlers.NewSmartOrderHandler(smartOrderRepo, portfolioRepo, enc)
 	botHandler := handlers.NewBotHandler(botRepo, botService, priceService)
 	analyticsHandler := handlers.NewAnalyticsHandler(analyticsService, snapshotRepo)
 	dcaHandler := handlers.NewDCAHandler(dcaBotRepo, dcaService)
