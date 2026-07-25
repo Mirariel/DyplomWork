@@ -90,6 +90,7 @@ TradeTracker Go — мультибіржовий портфельний трек
 | `/api/portfolio*`, `/api/positions/*`, `/api/history/*` | `trading:8082` |
 | `/api/orders*`, `/api/smart-orders*`, `/api/bots*`, `/api/dca*` | `trading:8082` |
 | `/api/futures*`, `/api/spot-trades*` | `trading:8082` |
+| `/api/credential-groups*` | `trading:8082` |
 | `/api/ai/*` | `trading:8082` |
 | `/api/analytics*` | `analytics:8083` |
 
@@ -207,8 +208,9 @@ tradetracker-go/
 │   ├── models/                 — структури + репозиторії (shared між усіма сервісами)
 │   │   ├── user.go             — User + UserRepository (Create, Find, UpdateProfile, UpdatePassword)
 │   │   ├── portfolio.go        — Asset, Position, History, ExternalApiCredential (label, api_key_hint), PortfolioRepository
-│   │   ├── order.go            — Order + OrderRepository
-│   │   ├── smart_order.go      — SmartOrder + SmartOrderRepository
+│   │   ├── order.go            — Order + OrderRepository (credential_id, leverage)
+│   │   ├── smart_order.go      — SmartOrder + SmartOrderRepository (credential_id, leverage)
+│   │   ├── credential_group.go — CredentialGroup + CredentialGroupMember + CredentialGroupRepository
 │   │   ├── bot.go              — Bot + BotGrid + BotRepository
 │   │   ├── snapshot.go         — PortfolioSnapshot + SnapshotRepository
 │   │   ├── dca_bot.go          — DCABot + DCABotRepository
@@ -218,8 +220,9 @@ tradetracker-go/
 │   │   ├── auth.go             — Register/Login/Logout/Me/UpdateProfile/ChangePassword
 │   │   ├── portfolio.go        — CRUD credentials (label, api_key_hint), comments, asset price
 │   │   ├── sync.go             — full/positions/history/prices
-│   │   ├── order.go            — PlaceOrder/CancelOrder/GetOrder/List
-│   │   ├── smart_order.go      — Create/List/Get/Cancel
+│   │   ├── order.go            — PlaceOrder/CancelOrder/GetOrder/List (credential_id, amount_pct)
+│   │   ├── smart_order.go      — Create/List/Get/Cancel (credential_id)
+│   │   ├── credential_group.go — Create/List/Delete groups + SetMembers
 │   │   ├── bot.go              — Create/List/Get/Start/Stop/Delete
 │   │   ├── analytics.go        — Summary/Coins/Snapshots/Arbitrage/Chart
 │   │   ├── dca.go              — Create/List/Get/Start/Stop/Delete
@@ -269,19 +272,24 @@ tradetracker-go/
 │       ├── server.go           — broadcast loop (2 s): positions + prices
 │       └── handler.go          — Fiber WS upgrade
 │
-├── migrations/                 — SQL файли 000001–000013
+├── migrations/                 — SQL файли 000001–000014
 │
 ├── frontend/
 │   ├── Dockerfile              — node:20-alpine → nginx:1.27-alpine
-│   ├── nginx.conf              — SPA routing, /api+/ws+/health proxy → api-gateway:8080
+│   ├── nginx.conf              — SPA routing, /api+/ws+/health proxy → api-gateway:8080, resolver directive
+│   ├── vitest.config.ts        — vitest unit test configuration
 │   └── src/
-│       ├── App.tsx             — React.lazy (10 сторінок) + Suspense
-│       ├── api.ts              — 35+ типізованих API функцій
+│       ├── App.tsx             — React.lazy (11 сторінок) + Suspense
+│       ├── api.ts              — 45+ типізованих API функцій
 │       ├── ws.ts               — useWebSocket hook (auto-reconnect 3 s)
 │       ├── context/AuthContext.tsx — user, token, login/logout/updateUser
-│       ├── components/Layout.tsx   — sidebar з 8 nav items
-│       └── pages/              — Login, Register, Dashboard, Portfolio, Orders,
-│                                  SmartOrders, GridBots, DCABots, Analytics, Settings
+│       ├── components/
+│       │   ├── Layout.tsx      — sidebar (9 nav items, Smart Orders removed)
+│       │   └── SymbolPanel.tsx — candlestick chart + symbol search + favorites
+│       ├── orders/             — unified order system (types, schemas, adapters, components, tests)
+│       └── pages/              — Login, Register, Dashboard, Portfolio, Orders (unified),
+│                                  GridBots, DCABots, Analytics, Settings,
+│                                  FuturesPositions, SpotTrades
 │
 ├── monitoring/
 │   ├── prometheus.yml          — 4 scrape targets (api-gateway, market-data, trading, analytics)
@@ -375,6 +383,11 @@ if !ok {
 | `position_history` (max_size) | market-data | 000011 |
 | `position_history` (leverage `"0x"` sentinel) | market-data | 000012 |
 | `portfolio_snapshots` (spot_value, futures_pnl) | trading | 000013 |
+| `credential_groups` | trading | 000014 |
+| `credential_group_members` | trading | 000014 |
+| `orders` (credential_id, leverage) | trading | 000014 |
+| `smart_orders` (credential_id, leverage) | trading | 000014 |
+| `external_api_credentials` (dropped unique constraint) | trading | 000014 |
 
 > Shared database — прагматичний підхід для дипломного проєкту.
 > Повна ізоляція БД (окрема схема/інстанс на сервіс) — природний наступний крок.

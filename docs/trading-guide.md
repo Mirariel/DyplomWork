@@ -51,7 +51,64 @@ curl -X POST http://localhost:8080/api/portfolio/credentials \
 
 ---
 
+## Credential Groups
+
+Credential groups дозволяють об'єднувати кілька API-ключів для мультиакаунтного виконання ордерів.
+
+### Створити групу
+
+```bash
+curl -X POST http://localhost:8080/api/credential-groups \
+  -H "Authorization: Bearer <token>" \
+  -H "Content-Type: application/json" \
+  -d '{ "name": "Scalping accounts" }'
+```
+
+### Список груп
+
+```bash
+curl http://localhost:8080/api/credential-groups -H "Authorization: Bearer <token>"
+```
+
+### Додати/змінити учасників групи
+
+```bash
+curl -X PUT http://localhost:8080/api/credential-groups/1/members \
+  -H "Authorization: Bearer <token>" \
+  -H "Content-Type: application/json" \
+  -d '{ "credential_ids": [1, 3, 5] }'
+```
+
+### Видалити групу
+
+```bash
+curl -X DELETE http://localhost:8080/api/credential-groups/1 -H "Authorization: Bearer <token>"
+```
+
+---
+
 ## Звичайні ордери
+
+> **Зміна у Phase 17:** поле `exchange` замінене на `credential_id` (ID конкретного API-ключа).
+> Поле `exchange` ще приймається для зворотної сумісності, але `credential_id` є пріоритетним.
+
+### 8 типів ордерів (Frontend)
+
+На сторінці Unified Orders доступні 8 типів:
+
+| Тип | Опис |
+|---|---|
+| `market` | Ринковий ордер — негайне виконання |
+| `limit` | Лімітний ордер — виконання за вказаною ціною |
+| `tp_sl` | Take-Profit + Stop-Loss (OCO) — парний ордер |
+| `chase` | Chase — слідує за ціною з офсетом |
+| `advanced_limit` | Лімітний з post_only / FOK / IOC time-in-force |
+| `trailing_stop` | Трейлінг-стоп — стоп що слідує за ціною |
+| `trigger` | Тригерний ордер — активується при досягненні ціни |
+| `scaled` | TWAP — розбиття великого ордеру на частини |
+
+Zod-валідація на фронтенді: `frontend/src/orders/schemas/index.ts`
+OKX adapter: `frontend/src/orders/adapters/okx.ts`
 
 ### Market ордер
 
@@ -60,7 +117,7 @@ curl -X POST http://localhost:8080/api/orders \
   -H "Authorization: Bearer <token>" \
   -H "Content-Type: application/json" \
   -d '{
-    "exchange":  "bybit",
+    "credential_id": 1,
     "symbol":    "BTC",
     "side":      "buy",
     "type":      "market",
@@ -76,7 +133,7 @@ curl -X POST http://localhost:8080/api/orders \
   -H "Authorization: Bearer <token>" \
   -H "Content-Type: application/json" \
   -d '{
-    "exchange":  "binance",
+    "credential_id": 2,
     "symbol":    "ETH",
     "side":      "buy",
     "type":      "limit",
@@ -86,19 +143,38 @@ curl -X POST http://localhost:8080/api/orders \
   }'
 ```
 
-### Futures ордер
+### Futures ордер з leverage
 
 ```bash
 curl -X POST http://localhost:8080/api/orders \
   -H "Authorization: Bearer <token>" \
   -H "Content-Type: application/json" \
   -d '{
-    "exchange":  "okx",
+    "credential_id": 3,
     "symbol":    "BTC",
     "side":      "buy",
     "type":      "market",
     "category":  "futures",
-    "quantity":  0.01
+    "quantity":  0.01,
+    "leverage":  10
+  }'
+```
+
+### Ордер з % від депозиту
+
+Замість абсолютної кількості можна вказати `amount_pct` — відсоток від доступного балансу:
+
+```bash
+curl -X POST http://localhost:8080/api/orders \
+  -H "Authorization: Bearer <token>" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "credential_id": 1,
+    "symbol":    "ETH",
+    "side":      "buy",
+    "type":      "market",
+    "category":  "spot",
+    "amount_pct": 25
   }'
 ```
 
@@ -141,6 +217,9 @@ POST /api/orders → Валідація → Decrypt credentials
 
 Умовні ордери що автоматично виконуються при досягненні ціни. Перевірка кожні **5 секунд**.
 
+> **Phase 17:** Smart orders тепер використовують `credential_id` замість `exchange`.
+> Поле `exchange` ще приймається для зворотної сумісності.
+
 ### Stop-Loss
 
 Захист від збитків — продає при падінні ціни нижче `trigger_price`.
@@ -150,12 +229,13 @@ curl -X POST http://localhost:8080/api/smart-orders \
   -H "Authorization: Bearer <token>" \
   -H "Content-Type: application/json" \
   -d '{
-    "exchange":      "binance",
+    "credential_id": 1,
     "symbol":        "BTC",
     "side":          "sell",
     "type":          "stop_loss",
     "quantity":      0.001,
-    "trigger_price": 60000
+    "trigger_price": 60000,
+    "leverage":      5
   }'
 ```
 
@@ -168,7 +248,7 @@ curl -X POST http://localhost:8080/api/smart-orders \
   -H "Authorization: Bearer <token>" \
   -H "Content-Type: application/json" \
   -d '{
-    "exchange":      "binance",
+    "credential_id": 1,
     "symbol":        "BTC",
     "side":          "sell",
     "type":          "take_profit",
@@ -186,7 +266,7 @@ curl -X POST http://localhost:8080/api/smart-orders \
   -H "Authorization: Bearer <token>" \
   -H "Content-Type: application/json" \
   -d '{
-    "exchange":    "bybit",
+    "credential_id": 2,
     "symbol":      "ETH",
     "side":        "sell",
     "type":        "trailing_stop",

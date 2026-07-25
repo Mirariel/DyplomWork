@@ -45,6 +45,7 @@ Go дає нам goroutines, канали, і compile-time safety без overhea
 ### Фаза 16.5 — Dashboard redesign (Exchange Filter + Live Prices Grid + Top Symbols) ✅ DONE
 ### Фаза 16.6 — Analytics Scheduler + PnL% formula fix ✅ DONE
 ### Фаза 16.7 — History Data Quality Fix (Leverage + Margin + ctVal) ✅ DONE
+### Фаза 17 — Unified Orders + Advanced Order System ✅ DONE
 
 **Сервіси:**
 
@@ -61,7 +62,7 @@ Go дає нам goroutines, канали, і compile-time safety без overhea
 | MySQL | localhost:3306 | |
 | Redis | localhost:6379 | price cache |
 
-**БД:** `tradetracker_go` (MySQL), версія міграції: 13
+**БД:** `tradetracker_go` (MySQL), версія міграції: 14
 **Запуск:** `docker compose up --build -d` → 10 контейнерів
 
 ---
@@ -96,6 +97,10 @@ Go дає нам goroutines, канали, і compile-time safety без overhea
 | Data fetching | `@tanstack/react-query` | v5.80.6 |
 | HTTP client | `axios` | v1.9.0 |
 | Charts | `recharts` | v2.15.4 |
+| Candlestick charts | `lightweight-charts` | latest |
+| Form validation | `zod` + `@hookform/resolvers` | latest |
+| Forms | `react-hook-form` | latest |
+| Testing | `vitest` | latest |
 | Icons | `lucide-react` | v0.511.0 |
 | CSS | `tailwindcss` + `@tailwindcss/vite` | v4.1.8 |
 | Language | TypeScript (strict) | v5.8.3 |
@@ -127,8 +132,9 @@ tradetracker-go/
 │   ├── models/
 │   │   ├── user.go             — User + UserRepository (Create/Find/UpdateProfile/UpdatePassword)
 │   │   ├── portfolio.go        — Asset, Position, History, ExternalApiCredential (label, api_key_hint) + PortfolioRepository
-│   │   ├── order.go            — Order + OrderRepository
-│   │   ├── smart_order.go      — SmartOrder + SmartOrderRepository
+│   │   ├── order.go            — Order + OrderRepository (credential_id, leverage)
+│   │   ├── smart_order.go      — SmartOrder + SmartOrderRepository (credential_id, leverage)
+│   │   ├── credential_group.go — CredentialGroup + CredentialGroupMember + CredentialGroupRepository
 │   │   ├── bot.go              — Bot + BotGrid + BotRepository
 │   │   ├── snapshot.go         — PortfolioSnapshot + SnapshotRepository
 │   │   ├── dca_bot.go          — DCABot + DCABotRepository
@@ -139,8 +145,9 @@ tradetracker-go/
 │   │   ├── auth.go             — Register/Login/Logout/Me/UpdateProfile/ChangePassword
 │   │   ├── portfolio.go        — CRUD credentials (label, api_key_hint), comments, SetCredentialHook
 │   │   ├── sync.go             — full/positions/history/prices + snapshot-on-sync
-│   │   ├── order.go            — PlaceOrder/Cancel/Get/List
-│   │   ├── smart_order.go      — Create/List/Get/Cancel
+│   │   ├── order.go            — PlaceOrder/Cancel/Get/List (credential_id, amount_pct)
+│   │   ├── smart_order.go      — Create/List/Get/Cancel (credential_id)
+│   │   ├── credential_group.go — CRUD credential groups + members
 │   │   ├── bot.go              — Create/List/Get/Start/Stop/Delete
 │   │   ├── analytics.go        — Summary/Coins/Snapshots/TakeSnapshot/Arbitrage
 │   │   ├── dca.go              — Create/List/Get/Start/Stop/Delete
@@ -186,7 +193,7 @@ tradetracker-go/
 │       ├── handler.go          — Fiber WS upgrade
 │       └── server_test.go      — unit тести roundFloat/formatLeverage
 │
-├── migrations/                 — SQL файли 000001–000009
+├── migrations/                 — SQL файли 000001–000014
 │   ├── 000001_initial_schema   — users, assets, portfolios, positions, history, credentials
 │   ├── 000002_orders           — orders table
 │   ├── 000003_smart_orders     — smart_orders table
@@ -199,26 +206,41 @@ tradetracker-go/
 │   ├── 000010_history_fields       — fee, opened_at + max_size NOT NULL DEFAULT 0
 │   ├── 000011_analytics_from_to    — analytics summary підтримка from/to date фільтрів
 │   ├── 000012_position_history_max_size — max_size колонка (якщо відсутня)
-│   └── 000013_history_leverage_fix — UPDATE SET leverage='0x' WHERE leverage='1x' AND exchange='okx'
+│   ├── 000013_history_leverage_fix — UPDATE SET leverage='0x' WHERE leverage='1x' AND exchange='okx'
+│   └── 000014_unified_orders       — credential_groups + credential_group_members tables; credential_id + leverage on orders/smart_orders
 │
 ├── frontend/
 │   ├── Dockerfile              — node:20-alpine → nginx:1.27-alpine
-│   ├── nginx.conf              — SPA routing, /api+/ws+/health proxy → api-gateway:8080, asset caching
+│   ├── nginx.conf              — SPA routing, /api+/ws+/health proxy → api-gateway:8080, resolver directive
 │   ├── vite.config.ts          — manualChunks: vendor-react/query/charts/icons/axios
+│   ├── vitest.config.ts        — vitest configuration for unit tests
 │   └── src/
-│       ├── App.tsx             — React.lazy (12 сторінок) + Suspense + route guards
+│       ├── App.tsx             — React.lazy (11 сторінок) + Suspense + route guards
 │       ├── api.ts              — 45+ типізованих API функцій; SpotTrade, FuturesPosition, Snapshot
 │       ├── ws.ts               — useWebSocket hook (auto-reconnect 3 s); spotPricesByExchange + topSymbols
 │       ├── context/AuthContext.tsx — user/token/login/logout/updateUser (cancelled-flag cleanup)
 │       ├── components/
-│       │   ├── Layout.tsx      — sidebar (10 nav items: + Futures, + Spot Trades), user footer
+│       │   ├── Layout.tsx      — sidebar (9 nav items, Smart Orders removed), user footer
+│       │   ├── SymbolPanel.tsx — candlestick chart (lightweight-charts) + Binance klines + symbol search + favorites
 │       │   ├── PriceChart.tsx  — recharts AreaChart + Binance klines API (15m/1h/4h/1d intervals)
-│       │   ├── CoinModal.tsx   — live price modal з PriceChart + external TradingView link
+│       │   ├── CoinModal.tsx   — live price modal з PriceChart (uses credential_id)
 │       │   ├── AiAdvisor.tsx   — AI chat widget (POST /api/ai/ask, Claude Haiku)
 │       │   └── ExchangeSelector.tsx — dropdown з активних credentials
-│       └── pages/              — Login, Register, Dashboard, Portfolio, Orders,
-│                                  SmartOrders, GridBots, DCABots, Analytics, Settings,
-│                                  FuturesPositions, SpotTrades (new)
+│       ├── orders/             — unified order system
+│       │   ├── types.ts        — discriminated union types for 8 order types
+│       │   ├── schemas/index.ts — zod validation schemas (discriminated union)
+│       │   ├── adapters/okx.ts — OKX API v5 adapter (maps to /trade/order + /trade/order-algo)
+│       │   ├── components/
+│       │   │   ├── OrderTypeSelector.tsx — 8-type selector UI
+│       │   │   ├── OrderForm.tsx         — main form (react-hook-form + zod)
+│       │   │   └── fields/index.tsx      — shared form fields
+│       │   ├── components/subforms/      — 8 subform files (one per order type)
+│       │   └── __tests__/
+│       │       ├── schemas.test.ts       — 15 schema validation tests
+│       │       └── okx.adapter.test.ts   — 8 OKX adapter tests
+│       └── pages/              — Login, Register, Dashboard, Portfolio, Orders (unified),
+│                                  GridBots, DCABots, Analytics, Settings,
+│                                  FuturesPositions, SpotTrades
 │
 ├── monitoring/
 │   ├── prometheus.yml          — 4 scrape targets (api-gateway, market-data, trading, analytics)
@@ -250,8 +272,14 @@ POST   /api/sync/full | /positions | /history
 GET    /api/sync/prices
 
 POST/GET/DELETE  /api/orders | /api/orders/:id
+GET              /api/orders?credential_ids=1,2,3
 
 POST/GET/DELETE  /api/smart-orders | /api/smart-orders/:id
+
+POST   /api/credential-groups
+GET    /api/credential-groups
+DELETE /api/credential-groups/:id
+PUT    /api/credential-groups/:id/members
 
 POST/GET/DELETE  /api/bots | /api/bots/:id
 POST             /api/bots/:id/start | /stop
@@ -310,7 +338,7 @@ GET    /ws   (WebSocket)
 
 ## З чого почати наступну сесію
 
-**Фази 0–16.6 завершені.** Проєкт повністю функціональний.
+**Фази 0–17 завершені.** Проєкт повністю функціональний.
 
 Найближчі пріоритети:
 - **Portfolio Value chart** — потребує 2+ snapshot-рядків у `portfolio_snapshots`; scheduler пише 1 раз/день, тому графік з'явиться природно через кілька днів
@@ -468,7 +496,22 @@ GET    /ws   (WebSocket)
   - [x] Sidebar: дата-фільтри (1d/7d/1m/3m preset + from/to date picker)
   - [x] Sidebar: R:R block (avgWin / |avgLoss|) з якісними мітками, Комісії, Profit Factor
 
-### Фаза 17 — Майбутнє
+### Фаза 17 — Unified Orders + Advanced Order System ✅
+- [x] Міграція 000014 — `credential_groups`, `credential_group_members` tables; dropped unique constraint on `external_api_credentials`; added `credential_id` + `leverage` to `orders` and `smart_orders`
+- [x] Credential Groups — API key grouping for multi-account order execution
+- [x] Unified Orders page — merged Orders + Smart Orders into one page; replaced exchange selector with credential selector
+- [x] 8-type Order Form — limit, market, TP/SL (OCO), chase, advanced limit (post_only/FOK/IOC), trailing stop, trigger, scaled (TWAP)
+- [x] SymbolPanel — candlestick chart (lightweight-charts) with Binance klines, symbol search, favorites (localStorage)
+- [x] Zod validation schemas — discriminated union schemas for all 8 order types
+- [x] OKX API v5 adapter — maps internal order model to `/trade/order` and `/trade/order-algo` endpoints
+- [x] Frontend packages — zod, react-hook-form, @hookform/resolvers, lightweight-charts, vitest
+- [x] Unit tests — 23 tests (15 schema + 8 adapter tests)
+- [x] Size % mode — orders can specify amount as % of deposit (`amount_pct`)
+- [x] Nginx DNS fix — resolver directive to prevent stale IP caching
+- [x] Settings.tsx — credential groups management section
+
+### Фаза 18 — Майбутнє
+- [ ] **Forgot Password / Reset Password** — endpoint `POST /api/auth/forgot-password` (скидання пароля за email), сторінка на фронтенді; наразі відновлення можливе лише вручну через БД
 - [ ] E2E тести (httptest / testcontainers)
 - [ ] Окрема БД на сервіс (повна ізоляція)
 - [ ] gRPC замість HTTP proxy для внутрішньої комунікації

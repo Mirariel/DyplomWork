@@ -219,32 +219,40 @@ Prometheus метрики (text/plain format).
 **Тіло:**
 ```json
 {
-  "exchange":  "binance",
+  "credential_id": 1,
   "symbol":    "BTC",
   "side":      "buy",
   "type":      "limit",
   "category":  "spot",
   "quantity":  0.001,
-  "price":     65000
+  "price":     65000,
+  "leverage":  10
 }
 ```
 
 | Поле | Тип | Обов'язкове | Допустимі значення |
 |---|---|---|---|
-| exchange | string | так | binance, okx, bybit |
+| credential_id | int | так* | ID з `/api/portfolio/credentials` |
+| exchange | string | ні* | binance, okx, bybit (legacy, fallback якщо credential_id не вказано) |
 | symbol | string | так | BTC, ETH, SOL... |
 | side | string | так | buy, sell |
 | type | string | так | market, limit |
 | category | string | так | spot, futures |
-| quantity | float | так | > 0 |
+| quantity | float | так** | > 0 |
+| amount_pct | float | ні** | 1–100 (% від депозиту; альтернатива quantity) |
 | price | float | для limit | > 0 |
+| leverage | int | ні | 1–125 (для futures) |
+
+\* `credential_id` є пріоритетним. Якщо не вказано, використовується `exchange` для зворотної сумісності.
+\** Одне з `quantity` або `amount_pct` має бути вказано.
 
 **Відповідь 201:**
 ```json
 {
-  "id": 42, "exchange": "binance", "exchange_order_id": "3847291",
+  "id": 42, "credential_id": 1, "exchange": "binance", "exchange_order_id": "3847291",
   "symbol": "BTC", "side": "buy", "type": "limit", "category": "spot",
-  "quantity": 0.001, "price": 65000, "filled_qty": 0, "avg_price": 0,
+  "quantity": 0.001, "price": 65000, "leverage": 10,
+  "filled_qty": 0, "avg_price": 0,
   "status": "new", "created_at": "2026-06-21T10:00:00Z"
 }
 ```
@@ -253,8 +261,10 @@ Prometheus метрики (text/plain format).
 
 ---
 
-### GET /api/orders?status=new
-Список ордерів (останні 100). Фільтр: `new | partial | filled | cancelled | rejected`.
+### GET /api/orders?status=new&credential_ids=1,2,3
+Список ордерів (останні 100). Фільтри:
+- `status` — `new | partial | filled | cancelled | rejected`
+- `credential_ids` — список credential ID через кому (наприклад `1,2,3`)
 
 ### GET /api/orders/:id
 Статус ордеру (живий запит до біржі якщо є `exchange_order_id`).
@@ -272,27 +282,31 @@ Prometheus метрики (text/plain format).
 **Тіло:**
 ```json
 {
-  "exchange":    "binance",
+  "credential_id": 1,
   "symbol":      "BTC",
   "side":        "sell",
   "type":        "stop_loss",
   "quantity":    0.001,
-  "trigger_price": 60000
+  "trigger_price": 60000,
+  "leverage":    5
 }
 ```
 
 | Поле | Тип | Допустимі значення |
 |---|---|---|
+| credential_id | int | ID з `/api/portfolio/credentials` (пріоритетне) |
+| exchange | string | binance, okx, bybit (legacy fallback) |
 | type | string | stop_loss, take_profit, trailing_stop |
 | side | string | buy, sell |
 | trigger_price | float | > 0 (для SL/TP) |
 | trail_delta | float | > 0 (для trailing_stop — відхилення від піку в USD) |
+| leverage | int | 1–125 (необов'язково) |
 
 **Відповідь 201:**
 ```json
 {
-  "id": 7, "exchange": "binance", "symbol": "BTC", "side": "sell",
-  "type": "stop_loss", "quantity": 0.001, "trigger_price": 60000,
+  "id": 7, "credential_id": 1, "exchange": "binance", "symbol": "BTC", "side": "sell",
+  "type": "stop_loss", "quantity": 0.001, "trigger_price": 60000, "leverage": 5,
   "status": "active", "created_at": "2026-06-21T10:00:00Z"
 }
 ```
@@ -588,6 +602,63 @@ Dollar-Cost Averaging: автоматична купівля активу за �
   ]
 }
 ```
+
+---
+
+## Credential Groups
+
+Групування API-ключів для мультиакаунтного виконання ордерів.
+
+### POST /api/credential-groups
+Створити нову групу.
+
+**Тіло:**
+```json
+{ "name": "Scalping accounts" }
+```
+
+**Відповідь 201:**
+```json
+{ "id": 1, "user_id": 7, "name": "Scalping accounts", "created_at": "2026-07-20T10:00:00Z" }
+```
+
+---
+
+### GET /api/credential-groups
+Список усіх груп поточного користувача (з учасниками).
+
+**Відповідь 200:**
+```json
+[
+  {
+    "id": 1, "name": "Scalping accounts",
+    "members": [
+      { "credential_id": 1, "exchange": "binance", "label": "Main" },
+      { "credential_id": 3, "exchange": "okx", "label": "OKX sub" }
+    ],
+    "created_at": "2026-07-20T10:00:00Z"
+  }
+]
+```
+
+---
+
+### DELETE /api/credential-groups/:id
+Видалити групу.
+
+**Відповідь 200:** `{"message": "deleted"}`
+
+---
+
+### PUT /api/credential-groups/:id/members
+Встановити список учасників групи (повна заміна).
+
+**Тіло:**
+```json
+{ "credential_ids": [1, 3, 5] }
+```
+
+**Відповідь 200:** `{"message": "members updated"}`
 
 ---
 
