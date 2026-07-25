@@ -126,15 +126,15 @@ function NewsTab({ symbol }: { symbol: string }) {
 
 function TradeTab({ symbol, currentPrice }: { symbol: string; currentPrice: number }) {
   const { data: creds = [] } = useQuery({ queryKey: ['credentials'], queryFn: getCredentials })
+  const activeCreds = creds.filter((c) => c.is_active)
   const [side, setSide]         = useState<'buy' | 'sell'>('buy')
   const [orderType, setOrderType] = useState<'market' | 'limit'>('market')
-  const [exchange, setExchange] = useState('')
+  const [selectedCredId, setSelectedCredId] = useState('')
   const [quantity, setQuantity] = useState('')
   const [price, setPrice]       = useState(currentPrice.toFixed(2))
   const [msg, setMsg]           = useState('')
 
-  const exchanges    = [...new Set(creds.map((c) => c.exchange))]
-  const activeEx     = exchange || exchanges[0] || ''
+  const activeCredId = selectedCredId || (activeCreds[0]?.id?.toString() ?? '')
   const limitPrice   = parseFloat(price || '0')
   const qty          = parseFloat(quantity || '0')
   const estTotal     = qty * (orderType === 'limit' ? limitPrice : currentPrice)
@@ -146,9 +146,9 @@ function TradeTab({ symbol, currentPrice }: { symbol: string; currentPrice: numb
   })
 
   const submit = () => {
-    if (!qty || !activeEx) return
+    if (!qty || !activeCredId) return
     const payload: PlaceOrderPayload = {
-      exchange: activeEx,
+      credential_id: parseInt(activeCredId),
       symbol: `${symbol}USDT`,
       side,
       category: 'spot',
@@ -161,18 +161,18 @@ function TradeTab({ symbol, currentPrice }: { symbol: string; currentPrice: numb
 
   return (
     <div className="p-4 space-y-4">
-      {exchanges.length > 0 ? (
+      {activeCreds.length > 0 ? (
         <>
-          {/* Exchange */}
+          {/* API Key */}
           <div>
-            <label className="block text-xs text-slate-400 mb-1.5">Exchange</label>
+            <label className="block text-xs text-slate-400 mb-1.5">API Key</label>
             <select
-              value={activeEx}
-              onChange={(e) => setExchange(e.target.value)}
+              value={activeCredId}
+              onChange={(e) => setSelectedCredId(e.target.value)}
               className="w-full bg-slate-700 border border-slate-600 text-slate-200 text-sm rounded-lg px-3 py-2 focus:outline-none focus:border-blue-500"
             >
-              {exchanges.map((ex) => (
-                <option key={ex} value={ex}>{ex.charAt(0).toUpperCase() + ex.slice(1)}</option>
+              {activeCreds.map((c) => (
+                <option key={c.id} value={c.id}>{c.label || `${c.exchange.toUpperCase()} (${c.api_key_hint})`}</option>
               ))}
             </select>
           </div>
@@ -240,7 +240,7 @@ function TradeTab({ symbol, currentPrice }: { symbol: string; currentPrice: numb
 
           <button
             onClick={submit}
-            disabled={!qty || !activeEx || mut.isPending}
+            disabled={!qty || !activeCredId || mut.isPending}
             className={`w-full py-2.5 text-sm font-semibold rounded-lg transition-colors disabled:opacity-50 ${
               side === 'buy' ? 'bg-green-600 hover:bg-green-500 text-white' : 'bg-red-600 hover:bg-red-500 text-white'
             }`}

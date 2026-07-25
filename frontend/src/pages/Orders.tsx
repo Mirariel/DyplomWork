@@ -1,7 +1,14 @@
-import { useState, type FormEvent } from 'react'
+import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { XCircle } from 'lucide-react'
-import { placeOrder, listOrders, cancelOrder, type PlaceOrderPayload } from '../api'
+import {
+  listOrders, cancelOrder,
+  listSmartOrders, cancelSmartOrder,
+  getCredentials, listCredentialGroups,
+  type Credential, type Order, type SmartOrder,
+} from '../api'
+import { OrderForm } from '../orders/components/OrderForm'
+import { SymbolPanel } from '../components/SymbolPanel'
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -9,27 +16,23 @@ const fmt$ = (v: number) =>
   `$${v.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
 
 const fmtDate = (iso: string) =>
-  new Date(iso).toLocaleString('en-US', {
-    month: 'short',
-    day: 'numeric',
-    hour: '2-digit',
-    minute: '2-digit',
-  })
+  new Date(iso).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })
 
 const STATUS_COLORS: Record<string, string> = {
   open: 'bg-blue-900/50 text-blue-400',
+  new: 'bg-blue-900/50 text-blue-400',
+  active: 'bg-blue-900/50 text-blue-400',
   filled: 'bg-green-900/50 text-green-400',
+  triggered: 'bg-purple-900/50 text-purple-400',
   cancelled: 'bg-red-900/50 text-red-400',
+  failed: 'bg-red-900/50 text-red-400',
+  rejected: 'bg-red-900/50 text-red-400',
   partial: 'bg-yellow-900/50 text-yellow-400',
 }
 
 function StatusBadge({ status }: { status: string }) {
   return (
-    <span
-      className={`text-xs font-medium px-2 py-0.5 rounded-full capitalize ${
-        STATUS_COLORS[status] ?? 'bg-slate-700 text-slate-400'
-      }`}
-    >
+    <span className={`text-xs font-medium px-2 py-0.5 rounded-full capitalize ${STATUS_COLORS[status] ?? 'bg-slate-700 text-slate-400'}`}>
       {status}
     </span>
   )
@@ -43,232 +46,155 @@ function Spinner() {
   )
 }
 
-// ─── Place Order form ─────────────────────────────────────────────────────────
-
-function PlaceOrderForm() {
-  const qc = useQueryClient()
-  const [orderType, setOrderType] = useState<'market' | 'limit'>('limit')
-  const [error, setError] = useState('')
-  const [success, setSuccess] = useState('')
-
-  const mutation = useMutation({
-    mutationFn: placeOrder,
-    onSuccess: () => {
-      void qc.invalidateQueries({ queryKey: ['orders'] })
-      setSuccess('Order placed successfully.')
-      setError('')
-      setTimeout(() => setSuccess(''), 3000)
-    },
-    onError: () => {
-      setError('Failed to place order. Check your credentials and parameters.')
-      setSuccess('')
-    },
-  })
-
-  const handleSubmit = (e: FormEvent<HTMLFormElement>) => {
-    e.preventDefault()
-    const fd = new FormData(e.currentTarget)
-    const payload: PlaceOrderPayload = {
-      exchange: fd.get('exchange') as string,
-      symbol: (fd.get('symbol') as string).toUpperCase(),
-      side: fd.get('side') as string,
-      category: fd.get('category') as string,
-      type: fd.get('type') as string,
-      quantity: parseFloat(fd.get('quantity') as string),
-    }
-    if (orderType === 'limit') {
-      payload.price = parseFloat(fd.get('price') as string)
-    }
-    mutation.mutate(payload)
-  }
-
-  return (
-    <div className="bg-slate-800 rounded-xl border border-slate-700 p-5">
-      <h2 className="font-semibold text-white mb-4">Place Order</h2>
-
-      {error && (
-        <div className="mb-3 px-3 py-2 rounded bg-red-900/40 border border-red-700 text-red-300 text-sm">
-          {error}
-        </div>
-      )}
-      {success && (
-        <div className="mb-3 px-3 py-2 rounded bg-green-900/40 border border-green-700 text-green-300 text-sm">
-          {success}
-        </div>
-      )}
-
-      <form
-        onSubmit={handleSubmit}
-        className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3"
-      >
-        <div>
-          <label className="label-sm">Exchange</label>
-          <select name="exchange" className="input-field">
-            {['binance', 'okx', 'bybit'].map((ex) => (
-              <option key={ex} value={ex}>
-                {ex.toUpperCase()}
-              </option>
-            ))}
-          </select>
-        </div>
-
-        <div>
-          <label className="label-sm">Symbol</label>
-          <input
-            name="symbol"
-            required
-            placeholder="BTCUSDT"
-            className="input-field uppercase"
-          />
-        </div>
-
-        <div>
-          <label className="label-sm">Side</label>
-          <select name="side" className="input-field">
-            <option value="buy">Buy</option>
-            <option value="sell">Sell</option>
-          </select>
-        </div>
-
-        <div>
-          <label className="label-sm">Category</label>
-          <select name="category" className="input-field">
-            <option value="spot">Spot</option>
-            <option value="futures">Futures</option>
-          </select>
-        </div>
-
-        <div>
-          <label className="label-sm">Order Type</label>
-          <select
-            name="type"
-            className="input-field"
-            onChange={(e) => setOrderType(e.target.value as 'market' | 'limit')}
-            value={orderType}
-          >
-            <option value="limit">Limit</option>
-            <option value="market">Market</option>
-          </select>
-        </div>
-
-        <div>
-          <label className="label-sm">Quantity</label>
-          <input
-            name="quantity"
-            type="number"
-            step="any"
-            min="0"
-            required
-            placeholder="0.001"
-            className="input-field"
-          />
-        </div>
-
-        {orderType === 'limit' && (
-          <div>
-            <label className="label-sm">Price (USD)</label>
-            <input
-              name="price"
-              type="number"
-              step="any"
-              min="0"
-              required={orderType === 'limit'}
-              placeholder="65000"
-              className="input-field"
-            />
-          </div>
-        )}
-
-        <div className="sm:col-span-2 lg:col-span-3 pt-1">
-          <button
-            type="submit"
-            disabled={mutation.isPending}
-            className="px-6 py-2 bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white text-sm font-medium rounded-lg transition-colors"
-          >
-            {mutation.isPending ? 'Placing…' : 'Place Order'}
-          </button>
-        </div>
-      </form>
-    </div>
-  )
+function credLabel(c: Credential) {
+  return c.label || `${c.exchange.toUpperCase()} (${c.api_key_hint})`
 }
 
-// ─── Orders list ──────────────────────────────────────────────────────────────
+// ─── Unified row type ─────────────────────────────────────────────────────────
+
+interface UnifiedRow {
+  kind: 'order' | 'smart'
+  id: number
+  credentialId?: number
+  exchange: string
+  symbol: string
+  side: string
+  category: string
+  leverage: string
+  type: string
+  quantity: number
+  price: number
+  priceLabel: string
+  status: string
+  createdAt: string
+  cancellable: boolean
+}
+
+function mergeRows(orders: Order[], smartOrders: SmartOrder[]): UnifiedRow[] {
+  const rows: UnifiedRow[] = []
+  for (const o of orders) {
+    rows.push({
+      kind: 'order', id: o.id, credentialId: o.credential_id, exchange: o.exchange,
+      symbol: o.symbol, side: o.side, category: o.category, leverage: o.leverage,
+      type: o.type, quantity: o.quantity, price: o.price,
+      priceLabel: o.price > 0 ? fmt$(o.price) : '—',
+      status: o.status, createdAt: o.created_at,
+      cancellable: o.status === 'open' || o.status === 'new',
+    })
+  }
+  for (const o of smartOrders) {
+    const isTrailing = o.order_type === 'trailing_stop'
+    rows.push({
+      kind: 'smart', id: o.id, credentialId: o.credential_id, exchange: o.exchange,
+      symbol: o.symbol, side: o.side, category: o.category, leverage: o.leverage,
+      type: o.order_type.replace(/_/g, ' '), quantity: o.quantity,
+      price: isTrailing ? o.callback_rate : o.trigger_price,
+      priceLabel: isTrailing ? `${o.callback_rate}%` : o.trigger_price > 0 ? fmt$(o.trigger_price) : '—',
+      status: o.status, createdAt: o.created_at, cancellable: o.status === 'active',
+    })
+  }
+  rows.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
+  return rows
+}
+
+// ─── Orders List ──────────────────────────────────────────────────────────────
 
 function OrdersList() {
   const qc = useQueryClient()
+  const [filterCredId, setFilterCredId] = useState('')
 
-  const { data: orders = [], isLoading } = useQuery({
-    queryKey: ['orders'],
-    queryFn: () => listOrders(),
+  const { data: credentials = [] } = useQuery({ queryKey: ['credentials'], queryFn: getCredentials, staleTime: 30_000 })
+  const { data: groups = [] } = useQuery({ queryKey: ['credential-groups'], queryFn: listCredentialGroups, staleTime: 30_000 })
+  const activeCreds = credentials.filter((c) => c.is_active)
+
+  let filterCredIDs: number[] | null = null
+  if (filterCredId.startsWith('cred:')) filterCredIDs = [parseInt(filterCredId.slice(5))]
+  else if (filterCredId.startsWith('group:')) {
+    const g = groups.find((x) => x.id === parseInt(filterCredId.slice(6)))
+    if (g) filterCredIDs = g.member_ids
+  }
+
+  const { data: orders = [], isLoading: ordersLoading } = useQuery({
+    queryKey: ['orders', filterCredIDs],
+    queryFn: () => listOrders(filterCredIDs ? { credential_ids: filterCredIDs!.join(',') } : undefined),
+    refetchInterval: 10_000,
+  })
+  const { data: smartOrders = [], isLoading: smartLoading } = useQuery({
+    queryKey: ['smart-orders'],
+    queryFn: listSmartOrders,
     refetchInterval: 10_000,
   })
 
-  const cancelMutation = useMutation({
-    mutationFn: cancelOrder,
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['orders'] }),
-  })
+  const cancelOrderMut = useMutation({ mutationFn: cancelOrder, onSuccess: () => qc.invalidateQueries({ queryKey: ['orders'] }) })
+  const cancelSmartMut = useMutation({ mutationFn: cancelSmartOrder, onSuccess: () => qc.invalidateQueries({ queryKey: ['smart-orders'] }) })
 
-  if (isLoading) return <Spinner />
+  const filteredSmartOrders = filterCredIDs
+    ? smartOrders.filter((so) => so.credential_id && filterCredIDs!.includes(so.credential_id))
+    : smartOrders
+
+  const rows = mergeRows(orders, filteredSmartOrders)
+  const credMap = new Map(activeCreds.map((c) => [c.id, credLabel(c)]))
+
+  if (ordersLoading || smartLoading) return <Spinner />
 
   return (
     <div className="bg-slate-800 rounded-xl border border-slate-700 overflow-hidden">
-      <div className="px-5 py-4 border-b border-slate-700">
-        <h2 className="font-semibold text-white text-sm">Orders ({orders.length})</h2>
+      <div className="px-5 py-4 border-b border-slate-700 flex items-center justify-between gap-3">
+        <select
+          value={filterCredId}
+          onChange={(e) => setFilterCredId(e.target.value)}
+          className="bg-slate-700 border border-slate-600 text-slate-200 text-sm rounded-lg px-3 py-1.5 focus:outline-none focus:ring-1 focus:ring-blue-500"
+        >
+          <option value="">All orders</option>
+          {activeCreds.length > 0 && (
+            <optgroup label="API Keys">
+              {activeCreds.map((c) => <option key={`cred:${c.id}`} value={`cred:${c.id}`}>{credLabel(c)}</option>)}
+            </optgroup>
+          )}
+          {groups.length > 0 && (
+            <optgroup label="Groups">
+              {groups.map((g) => <option key={`group:${g.id}`} value={`group:${g.id}`}>{g.name}</option>)}
+            </optgroup>
+          )}
+        </select>
+        <h2 className="font-semibold text-white text-sm">Orders ({rows.length})</h2>
       </div>
-      {orders.length === 0 ? (
+
+      {rows.length === 0 ? (
         <p className="px-5 py-6 text-sm text-slate-500">No orders found.</p>
       ) : (
         <div className="overflow-x-auto">
           <table className="w-full text-sm">
             <thead>
               <tr className="text-xs text-slate-400 border-b border-slate-700">
-                {['ID', 'Exchange', 'Symbol', 'Side', 'Type', 'Qty', 'Price', 'Status', 'Created', ''].map(
-                  (h) => (
-                    <th key={h} className="px-4 py-3 text-left font-medium whitespace-nowrap">
-                      {h}
-                    </th>
-                  ),
+                {['ID', 'API Key', 'Symbol', 'Side', 'Cat.', 'Lev.', 'Type', 'Qty', 'Price / Trigger', 'Status', 'Created', ''].map(
+                  (h) => <th key={h} className="px-4 py-3 text-left font-medium whitespace-nowrap">{h}</th>,
                 )}
               </tr>
             </thead>
             <tbody>
-              {orders.map((o) => (
-                <tr
-                  key={o.id}
-                  className="border-b border-slate-700/50 hover:bg-slate-700/40 transition-colors"
-                >
-                  <td className="px-4 py-3 text-slate-500 font-mono text-xs">#{o.id}</td>
-                  <td className="px-4 py-3 text-slate-300 capitalize">{o.exchange}</td>
-                  <td className="px-4 py-3 font-medium text-white">{o.symbol}</td>
+              {rows.map((r) => (
+                <tr key={`${r.kind}-${r.id}`} className="border-b border-slate-700/50 hover:bg-slate-700/40 transition-colors">
+                  <td className="px-4 py-3 text-slate-500 font-mono text-xs">{r.kind === 'smart' ? 'S' : ''}#{r.id}</td>
+                  <td className="px-4 py-3 text-slate-300 text-xs">{r.credentialId ? (credMap.get(r.credentialId) ?? r.exchange) : r.exchange}</td>
+                  <td className="px-4 py-3 font-medium text-white">{r.symbol}</td>
                   <td className="px-4 py-3">
-                    <span
-                      className={`text-xs font-medium px-2 py-0.5 rounded-full ${
-                        o.side === 'buy'
-                          ? 'bg-green-900/50 text-green-400'
-                          : 'bg-red-900/50 text-red-400'
-                      }`}
-                    >
-                      {o.side.toUpperCase()}
+                    <span className={`text-xs font-medium px-2 py-0.5 rounded-full ${r.side === 'buy' ? 'bg-green-900/50 text-green-400' : 'bg-red-900/50 text-red-400'}`}>
+                      {r.side.toUpperCase()}
                     </span>
                   </td>
-                  <td className="px-4 py-3 text-slate-300 capitalize">{o.type}</td>
-                  <td className="px-4 py-3 text-slate-300">{o.quantity}</td>
-                  <td className="px-4 py-3 text-slate-300">
-                    {o.price > 0 ? fmt$(o.price) : '—'}
-                  </td>
+                  <td className="px-4 py-3 text-slate-400 text-xs capitalize">{r.category}</td>
+                  <td className="px-4 py-3 text-slate-400 text-xs">{r.leverage || '—'}</td>
+                  <td className="px-4 py-3 text-slate-300 capitalize text-xs">{r.type}</td>
+                  <td className="px-4 py-3 text-slate-300">{r.quantity}</td>
+                  <td className="px-4 py-3 text-slate-300">{r.priceLabel}</td>
+                  <td className="px-4 py-3"><StatusBadge status={r.status} /></td>
+                  <td className="px-4 py-3 text-slate-400 whitespace-nowrap text-xs">{fmtDate(r.createdAt)}</td>
                   <td className="px-4 py-3">
-                    <StatusBadge status={o.status} />
-                  </td>
-                  <td className="px-4 py-3 text-slate-400 whitespace-nowrap text-xs">
-                    {fmtDate(o.created_at)}
-                  </td>
-                  <td className="px-4 py-3">
-                    {o.status === 'open' && (
+                    {r.cancellable && (
                       <button
-                        onClick={() => cancelMutation.mutate(o.id)}
-                        disabled={cancelMutation.isPending}
-                        title="Cancel order"
+                        onClick={() => r.kind === 'order' ? cancelOrderMut.mutate(r.id) : cancelSmartMut.mutate(r.id)}
+                        disabled={cancelOrderMut.isPending || cancelSmartMut.isPending}
                         className="text-slate-400 hover:text-red-400 transition-colors disabled:opacity-50"
                       >
                         <XCircle size={16} />
@@ -285,14 +211,17 @@ function OrdersList() {
   )
 }
 
-// ─── Orders page ──────────────────────────────────────────────────────────────
+// ─── Page ─────────────────────────────────────────────────────────────────────
 
 export default function Orders() {
+  const [symbol, setSymbol] = useState('BTC')
+
   return (
     <div className="space-y-6">
       <h1 className="text-2xl font-bold text-white">Orders</h1>
-      <PlaceOrderForm />
       <OrdersList />
+      <SymbolPanel symbol={symbol} onSymbolChange={setSymbol} />
+      <OrderForm symbol={`${symbol}-USDT-SWAP`} />
     </div>
   )
 }

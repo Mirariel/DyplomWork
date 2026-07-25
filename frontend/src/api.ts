@@ -120,10 +120,12 @@ export interface AddCredentialPayload {
 export interface Order {
   id: number
   user_id: number
+  credential_id?: number
   exchange: string
   symbol: string
   side: string
   category: string
+  leverage: string
   type: string
   quantity: number
   price: number
@@ -134,22 +136,26 @@ export interface Order {
 }
 
 export interface PlaceOrderPayload {
-  exchange: string
+  credential_id: number
   symbol: string
   side: string
   category: string
   type: string
-  quantity: number
+  leverage?: string
+  quantity?: number
+  amount_pct?: number
   price?: number
 }
 
 export interface SmartOrder {
   id: number
   user_id: number
+  credential_id?: number
   exchange: string
   symbol: string
   side: string
   category: string
+  leverage: string
   quantity: number
   order_type: string
   trigger_price: number
@@ -160,14 +166,28 @@ export interface SmartOrder {
 }
 
 export interface CreateSmartOrderPayload {
-  exchange: string
+  credential_id: number
   symbol: string
   side: string
   category: string
+  leverage?: string
   quantity: number
   order_type: string
   trigger_price?: number
   callback_rate?: number
+}
+
+export interface CredentialGroup {
+  id: number
+  user_id: number
+  name: string
+  member_ids: number[]
+  created_at: string
+}
+
+export interface CreateCredentialGroupPayload {
+  name: string
+  member_ids?: number[]
 }
 
 export interface Bot {
@@ -362,8 +382,8 @@ export const updatePrices = () =>
 export const placeOrder = (data: PlaceOrderPayload) =>
   api.post<Order>('/orders', data).then((r) => r.data)
 
-export const listOrders = (status?: string) =>
-  api.get<Order[]>('/orders', { params: status ? { status } : {} }).then((r) => r.data)
+export const listOrders = (params?: { status?: string; credential_ids?: string }) =>
+  api.get<Order[]>('/orders', { params }).then((r) => r.data)
 
 export const getOrder = (id: number) =>
   api.get<Order>(`/orders/${id}`).then((r) => r.data)
@@ -384,6 +404,20 @@ export const getSmartOrder = (id: number) =>
 
 export const cancelSmartOrder = (id: number) =>
   api.delete(`/smart-orders/${id}`).then((r) => r.data)
+
+// ─── Credential Groups ──────────────────────────────────────────────────────
+
+export const listCredentialGroups = () =>
+  api.get<CredentialGroup[]>('/credential-groups').then((r) => r.data)
+
+export const createCredentialGroup = (data: CreateCredentialGroupPayload) =>
+  api.post<CredentialGroup>('/credential-groups', data).then((r) => r.data)
+
+export const deleteCredentialGroup = (id: number) =>
+  api.delete(`/credential-groups/${id}`).then((r) => r.data)
+
+export const setGroupMembers = (id: number, member_ids: number[]) =>
+  api.put(`/credential-groups/${id}/members`, { member_ids }).then((r) => r.data)
 
 // ─── Bots ─────────────────────────────────────────────────────────────────────
 

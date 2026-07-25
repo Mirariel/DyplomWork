@@ -11,7 +11,6 @@ const Register   = lazy(() => import('./pages/Register'))
 const Dashboard  = lazy(() => import('./pages/Dashboard'))
 const Portfolio  = lazy(() => import('./pages/Portfolio'))
 const Orders     = lazy(() => import('./pages/Orders'))
-const SmartOrders = lazy(() => import('./pages/SmartOrders'))
 const GridBots   = lazy(() => import('./pages/GridBots'))
 const DCABots    = lazy(() => import('./pages/DCABots'))
 const Analytics  = lazy(() => import('./pages/Analytics'))
@@ -69,7 +68,6 @@ function AppRoutes() {
           <Route path="/" element={<Dashboard />} />
           <Route path="/portfolio" element={<Portfolio />} />
           <Route path="/orders" element={<Orders />} />
-          <Route path="/smart-orders" element={<SmartOrders />} />
           <Route path="/bots" element={<GridBots />} />
           <Route path="/dca" element={<DCABots />} />
           <Route path="/analytics" element={<Analytics />} />
