@@ -239,14 +239,18 @@ func (by *Bybit) GetClosedTrades(creds Credentials, startMs, endMs int64) ([]Clo
 						side = "LONG"
 					}
 					closedAt, _ := strconv.ParseInt(item.UpdatedTime, 10, 64)
+					lever := int(parseFloat(item.Leverage))
 					result = append(result, ClosedTrade{
-						Symbol:     normalizeSymbol(item.Symbol),
-						Side:       side,
-						Quantity:   parseFloat(item.Qty),
-						EntryPrice: parseFloat(item.AvgEntryPrice),
-						ClosePrice: parseFloat(item.AvgExitPrice),
-						PnL:        parseFloat(item.ClosedPnl),
-						ClosedAt:   closedAt,
+						Symbol:      normalizeSymbol(item.Symbol),
+						Side:        side,
+						Quantity:    parseFloat(item.Qty),
+						EntryPrice:  parseFloat(item.AvgEntryPrice),
+						ClosePrice:  parseFloat(item.AvgExitPrice),
+						PnL:         parseFloat(item.ClosedPnl),
+						Leverage:    lever,
+						MarginMode:  "cross", // Bybit closed-pnl doesn't return margin mode
+						NotionalUsd: parseFloat(item.Qty) * parseFloat(item.AvgEntryPrice),
+						ClosedAt:    closedAt,
 					})
 				}
 

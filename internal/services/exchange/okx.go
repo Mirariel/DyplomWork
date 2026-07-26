@@ -346,6 +346,11 @@ func (o *OKX) GetClosedTrades(creds Credentials, startMs, endMs int64) ([]Closed
 			}
 			notionalUsd = math.Abs(qty) * ctVal * parseFloat(item.OpenAvgPx)
 		}
+		mgnModeVal := strings.ToLower(item.MgnMode)
+		if mgnModeVal == "" {
+			mgnModeVal = "cross"
+		}
+
 		result = append(result, ClosedTrade{
 			Symbol:      normalizeSymbol(item.InstId),
 			Side:        side,
@@ -356,6 +361,7 @@ func (o *OKX) GetClosedTrades(creds Credentials, startMs, endMs int64) ([]Closed
 			Leverage:    lever,
 			Fee:         fee,
 			NotionalUsd: notionalUsd,
+			MarginMode:  mgnModeVal,
 			OpenedAt:    parseInt64(item.CTime),
 			ClosedAt:    closedMs,
 		})

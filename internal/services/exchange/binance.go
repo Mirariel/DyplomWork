@@ -137,10 +137,11 @@ func (b *Binance) GetClosedTrades(creds Credentials, startMs, endMs int64) ([]Cl
 			side = "SHORT"
 		}
 		result = append(result, ClosedTrade{
-			Symbol:   normalizeSymbol(item.Symbol),
-			Side:     side,
-			PnL:      pnl,
-			ClosedAt: item.Time,
+			Symbol:     normalizeSymbol(item.Symbol),
+			Side:       side,
+			PnL:        pnl,
+			MarginMode: "cross", // Binance income API doesn't return margin mode; default to cross
+			ClosedAt:   item.Time,
 		})
 	}
 	return result, nil

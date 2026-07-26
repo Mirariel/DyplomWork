@@ -41,6 +41,7 @@ type ClosedTrade struct {
 	Leverage    int     // кредитне плече (0 = невідомо / спот)
 	Fee         float64 // комісія (абсолютне значення USDT)
 	NotionalUsd float64 // повний розмір позиції в USD (з API; 0 = використати qty×entry)
+	MarginMode  string  // "cross" | "isolated" (порожнє = невідомо, фолбек "cross")
 	OpenedAt    int64   // Unix timestamp ms, 0 = невідомо
 	ClosedAt    int64   // Unix timestamp ms
 }

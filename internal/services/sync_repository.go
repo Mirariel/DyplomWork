@@ -151,16 +151,17 @@ func (r *syncRepository) insertHistory(h historyRow) error {
 		INSERT INTO position_history
 			(user_id, symbol, side, leverage, margin_mode,
 			 entry_price, exit_price, quantity, realized_pnl,
-			 fee, max_size, opened_at, closed_at, exchange)
+			 fee, max_size, margin, opened_at, closed_at, exchange)
 		VALUES
 			(:user_id, :symbol, :side, :leverage, :margin_mode,
 			 :entry_price, :exit_price, :quantity, :realized_pnl,
-			 :fee, :max_size, :opened_at, :closed_at, :exchange)
+			 :fee, :max_size, :margin, :opened_at, :closed_at, :exchange)
 		ON DUPLICATE KEY UPDATE
-			leverage = IF(VALUES(leverage) != '0x', VALUES(leverage), leverage),
-			fee      = IF(VALUES(fee) > 0,          VALUES(fee),      fee),
-			opened_at = IF(opened_at IS NULL AND VALUES(opened_at) IS NOT NULL, VALUES(opened_at), opened_at),
-			max_size = VALUES(max_size)
+			leverage   = IF(VALUES(leverage) != '0x', VALUES(leverage), leverage),
+			fee        = IF(VALUES(fee) > 0,          VALUES(fee),      fee),
+			margin     = IF(VALUES(margin) > 0,       VALUES(margin),   margin),
+			opened_at  = IF(opened_at IS NULL AND VALUES(opened_at) IS NOT NULL, VALUES(opened_at), opened_at),
+			max_size   = VALUES(max_size)
 	`, h)
 	return err
 }
@@ -256,6 +257,7 @@ type historyRow struct {
 	RealizedPnl float64  `db:"realized_pnl"`
 	Fee         float64  `db:"fee"`
 	MaxSize     float64  `db:"max_size"`
+	Margin      float64  `db:"margin"`
 	OpenedAt    *string  `db:"opened_at"`
 	ClosedAt    string   `db:"closed_at"`
 	Exchange    string   `db:"exchange"`

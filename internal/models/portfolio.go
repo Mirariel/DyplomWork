@@ -69,6 +69,7 @@ type PositionHistory struct {
 	RealizedPnl float64  `db:"realized_pnl" json:"realized_pnl"`
 	Fee         float64  `db:"fee"          json:"fee"`
 	MaxSize     float64  `db:"max_size"     json:"max_size"`
+	Margin      float64  `db:"margin"       json:"margin"`
 	OpenedAt    *string  `db:"opened_at"    json:"opened_at"`
 	ClosedAt    *string  `db:"closed_at"    json:"closed_at"`
 	Comment     *string  `db:"comment"      json:"comment"`

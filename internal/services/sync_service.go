@@ -360,13 +360,18 @@ func (s *SyncService) processPositions(userID int64, positions []exchange.Positi
 			continue
 		}
 
+		marginMode := p.MarginType
+		if marginMode == "" {
+			marginMode = "cross"
+		}
+
 		row := positionRow{
 			UserID:     userID,
 			AssetID:    assetID,
 			Symbol:     p.Symbol,
 			Exchange:   exchangeName,
 			Side:       side,
-			MarginMode: "cross",
+			MarginMode: marginMode,
 			EntryPrice: p.EntryPrice,
 			MarkPrice:  p.MarkPrice,
 			Quantity:   p.Quantity,
@@ -402,18 +407,30 @@ func (s *SyncService) processHistory(userID int64, trades []exchange.ClosedTrade
 			maxSize = t.Quantity * t.EntryPrice
 		}
 
+		marginMode := t.MarginMode
+		if marginMode == "" {
+			marginMode = "cross"
+		}
+
+		// margin = notional / leverage (виділена маржа під позицію)
+		var margin float64
+		if t.Leverage > 0 {
+			margin = maxSize / float64(t.Leverage)
+		}
+
 		row := historyRow{
 			UserID:      userID,
 			Symbol:      t.Symbol,
 			Side:        t.Side,
 			Leverage:    levStr,
-			MarginMode:  "cross",
+			MarginMode:  marginMode,
 			EntryPrice:  t.EntryPrice,
 			ExitPrice:   t.ClosePrice,
 			Quantity:    t.Quantity,
 			RealizedPnl: t.PnL,
 			Fee:         t.Fee,
 			MaxSize:     maxSize,
+			Margin:      margin,
 			OpenedAt:    openedAt,
 			ClosedAt:    closedAt,
 			Exchange:    exchangeName,
