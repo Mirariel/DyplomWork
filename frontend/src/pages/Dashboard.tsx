@@ -14,6 +14,7 @@ import { getSummary, getPortfolioChart, fullSync, getPortfolio, getTopSymbols, t
 import ExchangeSelector from '../components/ExchangeSelector'
 import { useWebSocket } from '../ws'
 import CoinModal from '../components/CoinModal'
+import { isLong } from '../lib/side'
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -296,7 +297,7 @@ export default function Dashboard() {
             className="flex items-center gap-2 px-4 py-2 bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white text-sm font-medium rounded-lg transition-colors"
           >
             <RefreshCw size={15} className={syncMutation.isPending ? 'animate-spin' : ''} />
-            Sync All
+            Refresh now
           </button>
         </div>
       </div>
@@ -401,8 +402,8 @@ export default function Dashboard() {
             <div className="flex flex-col items-center justify-center h-48 gap-2 text-center px-4">
               <p className="text-slate-400 text-sm font-medium">Not enough data yet</p>
               {chartData.length === 0
-                ? <p className="text-slate-500 text-xs">Click «Sync All» to record your first snapshot. Chart will populate within 15 minutes.</p>
-                : <p className="text-slate-500 text-xs">One more snapshot needed — chart updates every 15 minutes.</p>
+                ? <p className="text-slate-500 text-xs">Click «Refresh now» to record your first snapshot. Chart populates automatically.</p>
+                : <p className="text-slate-500 text-xs">One more snapshot needed — chart updates automatically.</p>
               }
             </div>
           ) : (
@@ -487,7 +488,7 @@ export default function Dashboard() {
                       <td className="px-5 py-3">
                         <span
                           className={`text-xs font-medium px-2 py-0.5 rounded-full ${
-                            p.side === 'long'
+                            isLong(p.side)
                               ? 'bg-green-900/50 text-green-400'
                               : 'bg-red-900/50 text-red-400'
                           }`}

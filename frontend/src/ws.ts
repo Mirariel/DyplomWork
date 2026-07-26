@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, useCallback } from 'react'
 import type { LivePosition } from './api'
+import { queryClient } from './main'
 
 // ─── WS Message types ─────────────────────────────────────────────────────────
 
@@ -16,7 +17,12 @@ interface WsUpdateMessage {
   top_symbols: string[]
 }
 
-type WsIncomingMessage = WsUpdateMessage | { type: string }
+interface WsSyncedMessage {
+  type: 'synced'
+  kind: string
+}
+
+type WsIncomingMessage = WsUpdateMessage | WsSyncedMessage | { type: string }
 
 // ─── Hook ─────────────────────────────────────────────────────────────────────
 
@@ -62,6 +68,13 @@ export function useWebSocket(): WsState {
           setSpotPrices(upd.spot_prices ?? {})
           setSpotPricesByExchange(upd.spot_prices_by_exchange ?? {})
           setTopSymbols(upd.top_symbols ?? [])
+        } else if (msg.type === 'synced') {
+          // Portfolio data was refreshed server-side — invalidate cached queries
+          void queryClient.invalidateQueries({ queryKey: ['portfolio'] })
+          void queryClient.invalidateQueries({ queryKey: ['futures'] })
+          void queryClient.invalidateQueries({ queryKey: ['history'] })
+          void queryClient.invalidateQueries({ queryKey: ['summary'] })
+          void queryClient.invalidateQueries({ queryKey: ['chart'] })
         }
       } catch {
         // ignore malformed messages
