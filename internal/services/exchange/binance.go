@@ -102,16 +102,19 @@ func (b *Binance) GetOpenPositions(creds Credentials) ([]Position, error) {
 				margin = notional / lev
 			}
 		}
+		entry := parseFloat(p.EntryPrice)
+		absQty := math.Abs(qty)
 		result = append(result, Position{
-			Symbol:     normalizeSymbol(p.Symbol),
-			Side:       side,
-			Quantity:   math.Abs(qty),
-			EntryPrice: parseFloat(p.EntryPrice),
-			MarkPrice:  parseFloat(p.MarkPrice),
-			Leverage:   int(parseFloat(p.Leverage)),
-			PnL:        parseFloat(p.UnRealizedProfit),
-			MarginType: marginType,
-			Margin:     margin,
+			Symbol:           normalizeSymbol(p.Symbol),
+			Side:             side,
+			Quantity:         absQty,
+			EntryPrice:       entry,
+			MarkPrice:        parseFloat(p.MarkPrice),
+			Leverage:         int(parseFloat(p.Leverage)),
+			PnL:              parseFloat(p.UnRealizedProfit),
+			MarginType:       marginType,
+			Margin:           margin,
+			NotionalEntryUsd: absQty * entry,
 		})
 	}
 	return result, nil

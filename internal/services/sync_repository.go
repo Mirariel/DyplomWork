@@ -100,9 +100,9 @@ func (r *syncRepository) upsertPosition(p positionRow) error {
 	return err
 }
 
-// transferMarginToHistory — перед видаленням stale позицій переносить останнє відоме
-// значення margin у position_history. Це єдине джерело правди про долиту маржу
-// для ізольованих позицій — positions-history API такого поля не має.
+// transferMarginToHistory — перед видаленням stale позицій переносить початкову
+// маржу з open_positions у position_history, але ТІЛЬКИ якщо history.margin = 0
+// (ще не обчислена). Не перезаписує вже обчислену маржу більшою фактичною.
 func (r *syncRepository) transferMarginToHistory(userID int64, exchangeName string, syncStart time.Time) error {
 	_, err := r.db.Exec(`
 		UPDATE position_history ph
@@ -115,7 +115,7 @@ func (r *syncRepository) transferMarginToHistory(userID int64, exchangeName stri
 		  AND op.exchange = ?
 		  AND op.updated_at < ?
 		  AND op.margin > 0
-		  AND (ph.margin = 0 OR ph.margin < op.margin)
+		  AND ph.margin = 0
 		  AND ph.closed_at = (
 			SELECT MAX(ph2.closed_at)
 			FROM position_history ph2

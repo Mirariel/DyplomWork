@@ -20,32 +20,34 @@ type Balance struct {
 
 // Position — відкрита ф'ючерсна/маржинальна позиція
 type Position struct {
-	Symbol        string
-	Side          string  // "LONG" | "SHORT"
-	Quantity      float64
-	EntryPrice    float64
-	MarkPrice     float64
-	Leverage      int
-	PnL           float64
-	MarginType    string  // "cross" | "isolated"
-	Margin        float64 // реальна маржа з біржі (0 = невідомо, використати notional/leverage)
-	InitialMargin float64 // initial margin requirement (imr) з біржі
+	Symbol           string
+	Side             string  // "LONG" | "SHORT"
+	Quantity         float64
+	EntryPrice       float64
+	MarkPrice        float64
+	Leverage         int
+	PnL              float64
+	MarginType       string  // "cross" | "isolated"
+	Margin           float64 // реальна маржа з біржі (фактична, може включати долиту маржу)
+	InitialMargin    float64 // initial margin requirement (imr) з біржі
+	NotionalEntryUsd float64 // notional at entry = qty_base × entry_price (для OKX: qty_contracts × ctVal × entry)
 }
 
 // ClosedTrade — закрита угода з PnL
 type ClosedTrade struct {
-	Symbol      string
-	Side        string
-	Quantity    float64
-	EntryPrice  float64
-	ClosePrice  float64
-	PnL         float64
-	Leverage    int     // кредитне плече (0 = невідомо / спот)
-	Fee         float64 // комісія (абсолютне значення USDT)
-	NotionalUsd float64 // повний розмір позиції в USD (з API; 0 = використати qty×entry)
-	MarginMode  string  // "cross" | "isolated" (порожнє = невідомо, фолбек "cross")
-	OpenedAt    int64   // Unix timestamp ms, 0 = невідомо
-	ClosedAt    int64   // Unix timestamp ms
+	Symbol           string
+	Side             string
+	Quantity         float64
+	EntryPrice       float64
+	ClosePrice       float64
+	PnL              float64
+	Leverage         int     // кредитне плече (0 = невідомо / спот)
+	Fee              float64 // комісія (абсолютне значення USDT)
+	NotionalUsd      float64 // повний розмір позиції в USD (з API; 0 = використати qty×entry)
+	NotionalEntryUsd float64 // notional at entry price = qty_base × entry (для OKX: qty_contracts × ctVal × entry)
+	MarginMode       string  // "cross" | "isolated" (порожнє = невідомо, фолбек "cross")
+	OpenedAt         int64   // Unix timestamp ms, 0 = невідомо
+	ClosedAt         int64   // Unix timestamp ms
 }
 
 // SpotTrade — одна спот-угода (buy/sell)

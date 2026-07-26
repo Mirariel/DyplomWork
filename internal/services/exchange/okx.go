@@ -8,14 +8,61 @@ import (
 	"math"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
 )
 
 const okxBaseURL = "https://www.okx.com"
 
-type OKX struct{}
+type OKX struct {
+	ctValMu    sync.RWMutex
+	ctValCache map[string]ctValEntry // instId → { value, fetchedAt }
+}
 
-func NewOKX() *OKX { return &OKX{} }
+type ctValEntry struct {
+	value     float64
+	fetchedAt time.Time
+}
+
+const ctValTTL = 24 * time.Hour
+
+func NewOKX() *OKX { return &OKX{ctValCache: make(map[string]ctValEntry)} }
+
+// ctValFor batch-fetches contract sizes (ctVal) for the given instrument IDs.
+// Results are cached in memory with a 24-hour TTL — contract sizes rarely change.
+func (o *OKX) ctValFor(instIds []string) map[string]float64 {
+	result := make(map[string]float64, len(instIds))
+	var toFetch []string
+
+	o.ctValMu.RLock()
+	for _, id := range instIds {
+		if e, ok := o.ctValCache[id]; ok && time.Since(e.fetchedAt) < ctValTTL {
+			result[id] = e.value
+		} else {
+			toFetch = append(toFetch, id)
+		}
+	}
+	o.ctValMu.RUnlock()
+
+	for _, instId := range toFetch {
+		var instrResp struct {
+			Code string `json:"code"`
+			Data []struct {
+				CtVal string `json:"ctVal"`
+			} `json:"data"`
+		}
+		reqURL := okxBaseURL + "/api/v5/public/instruments?instType=SWAP&instId=" + instId
+		if err := getPublic(reqURL, &instrResp); err == nil && instrResp.Code == "0" && len(instrResp.Data) > 0 {
+			if cv := parseFloat(instrResp.Data[0].CtVal); cv > 0 {
+				result[instId] = cv
+				o.ctValMu.Lock()
+				o.ctValCache[instId] = ctValEntry{value: cv, fetchedAt: time.Now()}
+				o.ctValMu.Unlock()
+			}
+		}
+	}
+	return result
+}
 
 func (o *OKX) Name() string { return "okx" }
 
@@ -188,6 +235,15 @@ func (o *OKX) GetOpenPositions(creds Credentials) ([]Position, error) {
 		return nil, fmt.Errorf("okx positions API code %s", resp.Code)
 	}
 
+	// Collect instIds for ctVal batch fetch
+	var instIds []string
+	for _, p := range resp.Data {
+		if parseFloat(p.Pos) != 0 {
+			instIds = append(instIds, p.InstId)
+		}
+	}
+	ctVals := o.ctValFor(instIds)
+
 	var result []Position
 	for _, p := range resp.Data {
 		qty := parseFloat(p.Pos)
@@ -206,17 +262,27 @@ func (o *OKX) GetOpenPositions(creds Credentials) ([]Position, error) {
 		if marginType == "" {
 			marginType = "cross"
 		}
+		entryPrice := parseFloat(p.AvgPx)
+
+		// NotionalEntryUsd = |qty_contracts| × ctVal × entry_price
+		ctVal := ctVals[p.InstId]
+		if ctVal == 0 {
+			ctVal = 1 // fallback: qty already in base units
+		}
+		notionalEntry := math.Abs(qty) * ctVal * entryPrice
+
 		result = append(result, Position{
-			Symbol:        normalizeSymbol(p.InstId),
-			Side:          side,
-			Quantity:      math.Abs(qty),
-			EntryPrice:    parseFloat(p.AvgPx),
-			MarkPrice:     parseFloat(p.MarkPx),
-			Leverage:      int(parseFloat(p.Lever)),
-			PnL:           parseFloat(p.Upl),
-			MarginType:    marginType,
-			Margin:        parseFloat(p.Margin),
-			InitialMargin: parseFloat(p.Imr),
+			Symbol:           normalizeSymbol(p.InstId),
+			Side:             side,
+			Quantity:         math.Abs(qty),
+			EntryPrice:       entryPrice,
+			MarkPrice:        parseFloat(p.MarkPx),
+			Leverage:         int(parseFloat(p.Lever)),
+			PnL:              parseFloat(p.Upl),
+			MarginType:       marginType,
+			Margin:           parseFloat(p.Margin),
+			InitialMargin:    parseFloat(p.Imr),
+			NotionalEntryUsd: notionalEntry,
 		})
 	}
 	return result, nil
@@ -283,30 +349,15 @@ func (o *OKX) GetClosedTrades(creds Credentials, startMs, endMs int64) ([]Closed
 		}
 	}
 
-	// Batch fetch ctVal (contract size) for instruments where notionalUsd is missing.
+	// Batch fetch ctVal (contract size) — uses in-memory cache (24h TTL).
 	// OKX qty in positions-history is in contracts, not in the underlying asset.
-	// notional = qty_contracts × ctVal × price
-	needsCtVal := map[string]bool{}
+	var allInstIds []string
 	for _, item := range resp.Data {
-		if parseFloat(item.NotionalUsd) == 0 && item.InstId != "" {
-			needsCtVal[item.InstId] = true
+		if item.InstId != "" {
+			allInstIds = append(allInstIds, item.InstId)
 		}
 	}
-	ctValByInst := make(map[string]float64, len(needsCtVal))
-	for instId := range needsCtVal {
-		var instrResp struct {
-			Code string `json:"code"`
-			Data []struct {
-				CtVal string `json:"ctVal"`
-			} `json:"data"`
-		}
-		url := okxBaseURL + "/api/v5/public/instruments?instType=SWAP&instId=" + instId
-		if err := getPublic(url, &instrResp); err == nil && instrResp.Code == "0" && len(instrResp.Data) > 0 {
-			if cv := parseFloat(instrResp.Data[0].CtVal); cv > 0 {
-				ctValByInst[instId] = cv
-			}
-		}
-	}
+	ctValByInst := o.ctValFor(allInstIds)
 
 	var result []ClosedTrade
 	for _, item := range resp.Data {
@@ -339,33 +390,42 @@ func (o *OKX) GetClosedTrades(creds Credentials, startMs, endMs int64) ([]Closed
 			}
 		}
 
+		entryPrice := parseFloat(item.OpenAvgPx)
+
+		// ctVal for contract-based qty conversion
+		ctVal := ctValByInst[item.InstId]
+		if ctVal == 0 {
+			ctVal = 1
+		}
+
+		// NotionalEntryUsd: ALWAYS computed from qty × ctVal × entry_price
+		notionalEntryUsd := math.Abs(qty) * ctVal * entryPrice
+
+		// NotionalUsd: from API (at close price) or fallback to entry-based
 		notionalUsd := parseFloat(item.NotionalUsd)
 		if notionalUsd == 0 {
-			// qty is in contracts; multiply by contract size to get underlying amount
-			ctVal := ctValByInst[item.InstId]
-			if ctVal == 0 {
-				ctVal = 1
-			}
-			notionalUsd = math.Abs(qty) * ctVal * parseFloat(item.OpenAvgPx)
+			notionalUsd = notionalEntryUsd
 		}
+
 		mgnModeVal := strings.ToLower(item.MgnMode)
 		if mgnModeVal == "" {
 			mgnModeVal = "cross"
 		}
 
 		result = append(result, ClosedTrade{
-			Symbol:      normalizeSymbol(item.InstId),
-			Side:        side,
-			Quantity:    math.Abs(qty),
-			EntryPrice:  parseFloat(item.OpenAvgPx),
-			ClosePrice:  parseFloat(item.CloseAvgPx),
-			PnL:         parseFloat(item.RealizedPnl),
-			Leverage:    lever,
-			Fee:         fee,
-			NotionalUsd: notionalUsd,
-			MarginMode:  mgnModeVal,
-			OpenedAt:    parseInt64(item.CTime),
-			ClosedAt:    closedMs,
+			Symbol:           normalizeSymbol(item.InstId),
+			Side:             side,
+			Quantity:         math.Abs(qty),
+			EntryPrice:       entryPrice,
+			ClosePrice:       parseFloat(item.CloseAvgPx),
+			PnL:              parseFloat(item.RealizedPnl),
+			Leverage:         lever,
+			Fee:              fee,
+			NotionalUsd:      notionalUsd,
+			NotionalEntryUsd: notionalEntryUsd,
+			MarginMode:       mgnModeVal,
+			OpenedAt:         parseInt64(item.CTime),
+			ClosedAt:         closedMs,
 		})
 	}
 	return result, nil

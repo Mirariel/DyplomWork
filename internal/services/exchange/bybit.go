@@ -155,16 +155,19 @@ func (by *Bybit) GetOpenPositions(creds Credentials) ([]Position, error) {
 			if p.TradeMode == 1 {
 				marginType = "isolated"
 			}
+			entry := parseFloat(p.AvgPrice)
+			absQty := math.Abs(qty)
 			result = append(result, Position{
-				Symbol:     normalizeSymbol(p.Symbol),
-				Side:       side,
-				Quantity:   math.Abs(qty),
-				EntryPrice: parseFloat(p.AvgPrice),
-				MarkPrice:  parseFloat(p.MarkPrice),
-				Leverage:   int(parseFloat(p.Leverage)),
-				PnL:        parseFloat(p.UnrealisedPnl),
-				MarginType: marginType,
-				Margin:     parseFloat(p.PositionIM),
+				Symbol:           normalizeSymbol(p.Symbol),
+				Side:             side,
+				Quantity:         absQty,
+				EntryPrice:       entry,
+				MarkPrice:        parseFloat(p.MarkPrice),
+				Leverage:         int(parseFloat(p.Leverage)),
+				PnL:              parseFloat(p.UnrealisedPnl),
+				MarginType:       marginType,
+				Margin:           parseFloat(p.PositionIM),
+				NotionalEntryUsd: absQty * entry,
 			})
 		}
 	}
