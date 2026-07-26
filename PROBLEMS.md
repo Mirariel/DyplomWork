@@ -1423,3 +1423,30 @@ DELETE видаляє всі позиції цієї біржі. Те саме �
 
 **Зачеплені файли:** `internal/services/sync_service.go`, `internal/services/sync_repository.go`,
 `internal/metrics/metrics.go`
+
+---
+
+## P-044 — ROI позиції: формула = PnL / початкова маржа
+
+**Коли:** Фаза 19 — уніфікація відображення PnL.
+
+**Проблема:**
+ROI можна рахувати від ноціоналу (trade_size) або від маржі (margin).
+Ноціонал дає дуже малі відсотки (бо це розмір без урахування плеча),
+що не збігається з тим, що показує біржа.
+
+**Рішення:**
+ROI = `PnL / margin × 100`, де margin — початкова маржа (`notional_at_entry / leverage`).
+Перевірено: OKX XAG-USD-SWAP — PnL 26.57 / margin 45.68 = 58.16%, що збігається
+з додатком OKX.
+
+`calcRoi(pnl, margin)` у `lib/format.ts` повертає `null` якщо margin ≤ 0
+(старі cross-угоди без маржі) — UI не рендерить відсоток, без прочерку.
+
+**Правило:**
+- Ніхто НЕ рахує ROI від ноціоналу (trade_size) — це розмір позиції для інфо.
+- Ніхто НЕ рахує ROI від mark_price × qty — це дрейфує з ринком.
+- Знаменник ROI — завжди `margin` (= початкова маржа, зафіксована при відкритті).
+
+**Зачеплені файли:** `frontend/src/lib/format.ts`, `frontend/src/components/PositionsTable.tsx`,
+`frontend/src/pages/FuturesPositions.tsx`, `frontend/src/pages/Portfolio.tsx`

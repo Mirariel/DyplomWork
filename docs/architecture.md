@@ -104,7 +104,7 @@ TradeTracker Go — мультибіржовий портфельний трек
 |---|---|
 | Sync endpoints | `POST /api/sync/{full,positions,history}`, `GET /api/sync/prices` |
 | Price scheduler | Кожні 30 с: `UpdateAllAssets()` → MySQL + Redis, потім publish NATS `market.prices.updated` |
-| sync-live scheduler | Кожні 45 с (configurable): `SyncPositions` + `SyncBalances` лише для юзерів з активним WS → publish `portfolio.synced` |
+| sync-live scheduler | Кожні 20 с (`SYNC_LIVE_INTERVAL`, configurable): `SyncPositions` + `SyncBalances` лише для юзерів з активним WS → publish `portfolio.synced`. 20 с = 3 виклики/хв на ключ (менше за 3.3/хв до уніфікації). |
 | sync-deep scheduler | Кожні 15 хв (configurable): `SyncAllUsers()` — повний синк усіх зареєстрованих юзерів → publish `portfolio.synced` |
 | NATS subscribe | `gateway.active-users` → оновлює локальний список активних user_id |
 | Auth | `InternalAuth` middleware — читає `X-Internal-User-ID` (не валідує JWT) |
@@ -421,6 +421,11 @@ if !ok {
 | `position_history` (margin column) | market-data | 000015 |
 | `open_positions` (real margin from exchange) | market-data | 000016 |
 | `position_history` (backfill margin for existing rows) | market-data | 000017 |
+
+> **`open_positions.trade_size`** — ноціонал позиції за ціною входу (qty × ctVal × entryPrice).
+> Фіксується один раз при синку; при доливанні перераховується, бо біржа змінює avgPx/qty.
+> Використовується для стабільного відображення розміру позиції (не дрейфує з ринковою ціною).
+> На фронтенді ROI = `PnL / margin × 100` — збігається з формулою OKX.
 
 > Shared database — прагматичний підхід для дипломного проєкту.
 > Повна ізоляція БД (окрема схема/інстанс на сервіс) — природний наступний крок.

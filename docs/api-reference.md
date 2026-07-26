@@ -573,7 +573,12 @@ Dollar-Cost Averaging: автоматична купівля активу за �
       "symbol": "BTCUSDT", "side": "LONG",
       "size": 0.01, "entry_price": 65000, "mark_price": 67000,
       "unrealized_pnl": 20.0, "leverage": 10,
-      "margin_type": "cross", "synced_at": "2026-06-24T10:00:00Z"
+      "margin_type": "cross",
+      "margin": 650.0,
+      "margin_mode": "isolated",
+      "trade_size": 6500.0,
+      "quantity": 0.1,
+      "synced_at": "2026-06-24T10:00:00Z"
     }
   ],
   "total_unrealized_pnl": 20.0
