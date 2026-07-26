@@ -379,10 +379,10 @@ if !ok {
 | `external_api_credentials` (label, api_key_hint) | trading | 000007 |
 | `futures_positions` | trading, market-data | 000008 |
 | `spot_trades` | market-data | 000009 |
-| `position_history` (fee, opened_at) | market-data | 000010 |
-| `position_history` (max_size) | market-data | 000011 |
-| `position_history` (leverage `"0x"` sentinel) | market-data | 000012 |
-| `portfolio_snapshots` (spot_value, futures_pnl) | trading | 000013 |
+| `portfolio_snapshots` (snapshot_at DATETIME) | analytics | 000010 |
+| `portfolio_snapshots` (drop unique constraint) | analytics | 000011 |
+| `portfolio_snapshots` (exchange column + index) | analytics | 000012 |
+| `position_history` (leverage `"0x"` sentinel for OKX) | market-data | 000013 |
 | `credential_groups` | trading | 000014 |
 | `credential_group_members` | trading | 000014 |
 | `orders` (credential_id, leverage) | trading | 000014 |

@@ -203,9 +203,9 @@ tradetracker-go/
 │   ├── 000007_credentials_label — label + api_key_hint колонки в external_api_credentials
 │   ├── 000008_futures_positions — futures_positions table (DECIMAL(20,8), leverage INT, margin_type)
 │   ├── 000009_spot_trades      — spot_trades table (buy/sell, fee, fee_asset, traded_at)
-│   ├── 000010_history_fields       — fee, opened_at + max_size NOT NULL DEFAULT 0
-│   ├── 000011_analytics_from_to    — analytics summary підтримка from/to date фільтрів
-│   ├── 000012_position_history_max_size — max_size колонка (якщо відсутня)
+│   ├── 000010_snapshot_datetime    — snapshot_date DATE → snapshot_at DATETIME + unique key
+│   ├── 000011_snapshot_no_unique   — drop unique constraint on portfolio_snapshots (INSERT замість UPSERT)
+│   ├── 000012_snapshot_exchange    — exchange column в portfolio_snapshots + index
 │   ├── 000013_history_leverage_fix — UPDATE SET leverage='0x' WHERE leverage='1x' AND exchange='okx'
 │   └── 000014_unified_orders       — credential_groups + credential_group_members tables; credential_id + leverage on orders/smart_orders
 │
@@ -285,6 +285,7 @@ POST/GET/DELETE  /api/bots | /api/bots/:id
 POST             /api/bots/:id/start | /stop
 
 GET    /api/analytics/summary | /coins | /snapshots?days=30 | /arbitrage?min_spread=0.5
+GET    /api/analytics/chart?range=7d&exchange=all   — 15-хв бакети для графіку портфеля (range: 1d/7d/30d/90d/custom + from/to)
 POST   /api/analytics/snapshot
 
 POST/GET/DELETE  /api/dca | /api/dca/:id
