@@ -12,14 +12,17 @@ export function useAppliedFilter() {
   const [draft, setDraft] = useState<DateFilter>(EMPTY)
   const [applied, setApplied] = useState<DateFilter>(EMPTY)
 
-  const draftChanged = draft.from !== applied.from || draft.to !== applied.to
+  // Only true when manual date inputs differ from applied — presets apply instantly
+  const draftChanged = draft.preset === '' && (draft.from !== applied.from || draft.to !== applied.to)
 
   const applyPreset = useCallback((label: string, days: number) => {
     const to = new Date()
     const from = new Date()
     from.setDate(from.getDate() - (days - 1))
     const fmt = (d: Date) => d.toISOString().slice(0, 10)
-    setDraft({ from: fmt(from), to: fmt(to), preset: label })
+    const filter = { from: fmt(from), to: fmt(to), preset: label }
+    setDraft(filter)
+    setApplied(filter)
   }, [])
 
   const applyFilters = useCallback(() => {

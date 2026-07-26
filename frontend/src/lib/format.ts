@@ -1,7 +1,7 @@
 import type { TradeSummary } from '../api'
 
 export const fmt$ = (v: number) =>
-  `$${v.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+  `$${(v ?? 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
 
 export const fmtDate = (iso: string | null | undefined) => {
   if (!iso) return '\u2014'
@@ -25,8 +25,7 @@ export function calcRoi(pnl: number, margin: number): number | null {
 }
 
 /** Aggregate Risk/Reward ratio: avgWin / |avgLoss|. null if no losing trades. */
-export function calcRR(summary: TradeSummary): number | null {
-  return summary.avg_loss < 0
-    ? summary.avg_win / Math.abs(summary.avg_loss)
-    : null
+export function calcRR(summary: TradeSummary | null | undefined): number | null {
+  if (!summary || !(summary.avg_loss < 0)) return null
+  return summary.avg_win / Math.abs(summary.avg_loss)
 }
