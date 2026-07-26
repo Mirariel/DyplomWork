@@ -573,7 +573,7 @@ Dollar-Cost Averaging: автоматична купівля активу за �
       "symbol": "BTCUSDT", "side": "LONG",
       "size": 0.01, "entry_price": 65000, "mark_price": 67000,
       "unrealized_pnl": 20.0, "leverage": 10,
-      "margin_type": "cross",
+      "margin_type": "isolated",
       "margin": 650.0,
       "margin_mode": "isolated",
       "trade_size": 6500.0,
@@ -724,15 +724,22 @@ Dollar-Cost Averaging: автоматична купівля активу за �
   "positions": [
     {
       "symbol": "BTC", "side": "LONG", "exchange": "bybit",
+      "margin_mode": "isolated", "leverage": "10x",
       "entry_price": 65000, "mark_price": 67420,
-      "pnl": 241.5, "pnl_pct": 1.85, "leverage": "10x"
+      "quantity": 0.01, "trade_size": 6500.0, "margin": 650.0,
+      "pnl": 241.5, "pnl_pct": 1.85
     }
   ],
   "spot_prices": {
     "BTC": 67420,
     "ETH": 3210,
     "SOL": 145.0
-  }
+  },
+  "spot_prices_by_exchange": {
+    "binance": { "BTC": 67420, "ETH": 3210 },
+    "okx": { "BTC": 67415, "ETH": 3208 }
+  },
+  "top_symbols": ["BTC", "ETH", "SOL", "BNB", "XRP"]
 }
 ```
 

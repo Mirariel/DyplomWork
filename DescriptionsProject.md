@@ -46,6 +46,9 @@ Go дає нам goroutines, канали, і compile-time safety без overhea
 ### Фаза 16.6 — Analytics Scheduler + PnL% formula fix ✅ DONE
 ### Фаза 16.7 — History Data Quality Fix (Leverage + Margin + ctVal) ✅ DONE
 ### Фаза 17 — Unified Orders + Advanced Order System ✅ DONE
+### Фаза 17.1 — Auto-Sync (Live + Deep) ✅ DONE
+### Фаза 17.2 — History Margin Fix ✅ DONE
+### Фаза 18 — Shared Components + UX Polish ✅ DONE
 
 **Сервіси:**
 
@@ -62,8 +65,8 @@ Go дає нам goroutines, канали, і compile-time safety без overhea
 | MySQL | localhost:3306 | |
 | Redis | localhost:6379 | price cache |
 
-**БД:** `tradetracker_go` (MySQL), версія міграції: 14
-**Запуск:** `docker compose up --build -d` → 10 контейнерів
+**БД:** `tradetracker_go` (MySQL), версія міграції: 17
+**Запуск:** `docker compose up --build -d` → 11 контейнерів
 
 ---
 
@@ -166,7 +169,8 @@ tradetracker-go/
 │   │   ├── dca_service.go      — Start/Stop/CheckAndBuy (5 min)
 │   │   ├── top_symbols_service.go — TopSymbolsService (FetchTopSymbols via Binance 24h ticker, Redis TTL 1h)
 │   │   └── exchange/           — 6 бірж: Binance/OKX/Bybit/Gate/Kraken/KuCoin
-│   │       ├── interface.go    — Exchange interface + Balance/Position(+MarginType)/ClosedTrade(+Fee/NotionalUsd/OpenedAt)/SpotTrade + SpotTrader
+│   │       ├── interface.go    — Exchange interface + Balance/Position(+MarginType+NotionalEntryUsd)/ClosedTrade(+Fee/NotionalUsd/OpenedAt/MarginMode)/SpotTrade + SpotTrader
+│   │       ├── margin.go       — InitialMargin(notional, leverage) shared helper
 │   │       ├── registry.go + client.go + helpers.go + parse.go + trader.go
 │   │       ├── binance.go      — GetBalances/GetOpenPositions/GetClosedTrades/GetPrices/GetRecentTrades
 │   │       ├── okx.go          — GetBalances/GetOpenPositions/GetClosedTrades(+lever-info fallback+ctVal lookup)/GetPrices/GetRecentTrades
@@ -193,7 +197,7 @@ tradetracker-go/
 │       ├── handler.go          — Fiber WS upgrade
 │       └── server_test.go      — unit тести roundFloat/formatLeverage
 │
-├── migrations/                 — SQL файли 000001–000014
+├── migrations/                 — SQL файли 000001–000017
 │   ├── 000001_initial_schema   — users, assets, portfolios, positions, history, credentials
 │   ├── 000002_orders           — orders table
 │   ├── 000003_smart_orders     — smart_orders table
@@ -207,25 +211,34 @@ tradetracker-go/
 │   ├── 000011_snapshot_no_unique   — drop unique constraint on portfolio_snapshots (INSERT замість UPSERT)
 │   ├── 000012_snapshot_exchange    — exchange column в portfolio_snapshots + index
 │   ├── 000013_history_leverage_fix — UPDATE SET leverage='0x' WHERE leverage='1x' AND exchange='okx' 
-│   └── 000014_unified_orders       — credential_groups + credential_group_members tables; credential_id + leverage on orders/smart_orders
+│   ├── 000014_unified_orders       — credential_groups + credential_group_members tables; credential_id + leverage on orders/smart_orders
+│   ├── 000015_history_margin       — margin DECIMAL(20,8) column in position_history
+│   ├── 000016_open_positions_margin — margin column in open_positions
+│   └── 000017_backfill_history_margin — backfill margin for existing rows in position_history
 │
 ├── frontend/
 │   ├── Dockerfile              — node:20-alpine → nginx:1.27-alpine
-│   ├── nginx.conf              — SPA routing, /api+/ws+/health proxy → api-gateway:8080, resolver directive
+│   ├── nginx.conf              — SPA routing, /api+/ws+/health proxy → api-gateway:8080, resolver directive, no-store index.html
 │   ├── vite.config.ts          — manualChunks: vendor-react/query/charts/icons/axios
 │   ├── vitest.config.ts        — vitest configuration for unit tests
 │   └── src/
-│       ├── App.tsx             — React.lazy (11 сторінок) + Suspense + route guards
+│       ├── App.tsx             — React.lazy (10 сторінок) + Suspense + route guards
 │       ├── api.ts              — 45+ типізованих API функцій; SpotTrade, FuturesPosition, Snapshot
 │       ├── ws.ts               — useWebSocket hook (auto-reconnect 3 s); spotPricesByExchange + topSymbols
 │       ├── context/AuthContext.tsx — user/token/login/logout/updateUser (cancelled-flag cleanup)
+│       ├── lib/
+│       │   ├── format.ts       — fmt$, fmtDate, fmtPct, parseLeverage, calcRoi, calcRR
+│       │   ├── side.ts         — isLong() helper (normalizes LONG/long/buy → true)
+│       │   └── useAppliedFilter.ts — draft/applied date filter hook (presets instant, manual GO)
 │       ├── components/
 │       │   ├── Layout.tsx      — sidebar (9 nav items, Smart Orders removed), user footer
 │       │   ├── SymbolPanel.tsx — candlestick chart (lightweight-charts) + Binance klines + symbol search + favorites
 │       │   ├── PriceChart.tsx  — recharts AreaChart + Binance klines API (15m/1h/4h/1d intervals)
 │       │   ├── CoinModal.tsx   — live price modal з PriceChart (uses credential_id)
 │       │   ├── AiAdvisor.tsx   — AI chat widget (POST /api/ai/ask, Claude Haiku)
-│       │   └── ExchangeSelector.tsx — dropdown з активних credentials
+│       │   ├── ExchangeSelector.tsx — dropdown з активних credentials
+│       │   ├── PositionsTable.tsx — shared table for open positions (Dashboard, Futures, Portfolio)
+│       │   └── StatsPanel.tsx  — trade statistics sidebar panel (winrate, PnL, R:R, profit factor)
 │       ├── orders/             — unified order system
 │       │   ├── types.ts        — discriminated union types for 8 order types
 │       │   ├── schemas/index.ts — zod validation schemas (discriminated union)
@@ -240,7 +253,7 @@ tradetracker-go/
 │       │       └── okx.adapter.test.ts   — 8 OKX adapter tests
 │       └── pages/              — Login, Register, Dashboard, Portfolio, Orders (unified),
 │                                  GridBots, DCABots, Analytics, Settings,
-│                                  FuturesPositions, SpotTrades
+│                                  FuturesPositions
 │
 ├── monitoring/
 │   ├── prometheus.yml          — 4 scrape targets (api-gateway, market-data, trading, analytics)
@@ -249,7 +262,7 @@ tradetracker-go/
 │       └── dashboards/tradetracker.json — 10 panels: HTTP rate/latency/errors, WS, bots, scheduler
 │
 ├── Dockerfile                  — golang:1.26-alpine → alpine:3.20 (5 бінарників в одному image)
-├── docker-compose.yml          — 10 сервісів: db, redis, nats, migrate, 4×Go, frontend, prometheus, grafana
+├── docker-compose.yml          — 11 сервісів: db, redis, nats, migrate, 4×Go, frontend, prometheus, grafana
 └── docs/                       — ця документація
 ```
 
@@ -339,7 +352,7 @@ GET    /ws   (WebSocket)
 
 ## З чого почати наступну сесію
 
-**Фази 0–17 завершені.** Проєкт повністю функціональний.
+**Фази 0–18 завершені.** Проєкт повністю функціональний.
 
 Найближчі пріоритети:
 - **Portfolio Value chart** — потребує 2+ snapshot-рядків у `portfolio_snapshots`; scheduler пише 1 раз/день, тому графік з'явиться природно через кілька днів
@@ -528,7 +541,22 @@ GET    /ws   (WebSocket)
 - [x] Frontend: `HistoryEntry.margin` field; Portfolio History table shows "Size" (notional) + "Маржа" (allocated margin + margin mode label)
 - [x] Bybit adapter: now parses leverage from closed-pnl endpoint
 
-### Фаза 18 — Майбутнє
+### Фаза 18 — Shared Components + UX Polish ✅
+- [x] Shared `PositionsTable` component — єдина таблиця позицій для Dashboard, Futures, Portfolio
+- [x] Shared `StatsPanel` component — sidebar зі статистикою (PnL, winrate, R:R, profit factor)
+- [x] `lib/format.ts` — fmt$, fmtPct, calcRoi, calcRR helpers (defensive null handling)
+- [x] `lib/side.ts` — isLong() normalizer
+- [x] `lib/useAppliedFilter.ts` — hook для дата-фільтрів: presets apply instantly, GO тільки для manual dates
+- [x] `exchange.InitialMargin()` — shared helper замість дублювання margin = notional / leverage
+- [x] WS LivePosition: заповнення TradeSize, Margin, MarginMode (замість хардкоду "cross")
+- [x] Portfolio: прибрано Comment column і GO button в Positions tab, direct exchange filter
+- [x] PositionsTable: прибрано окрему колонку Margin Type (info лишилась у subtitle)
+- [x] nginx.conf: Cache-Control no-store для index.html (запобігає stale Vite хешам)
+- [x] Makefile: `make frontend-redeploy` / `make backend-redeploy` з --no-deps (P-036)
+- [x] Migration 000016: margin column in open_positions
+- [x] Migration 000017: backfill margin for existing position_history rows
+
+### Фаза 19 — Майбутнє
 - [ ] **Forgot Password / Reset Password** — endpoint `POST /api/auth/forgot-password` (скидання пароля за email), сторінка на фронтенді; наразі відновлення можливе лише вручну через БД
 - [ ] E2E тести (httptest / testcontainers)
 - [ ] Окрема БД на сервіс (повна ізоляція)

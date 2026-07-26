@@ -53,6 +53,7 @@ type ClosedTrade struct {
     ClosePrice  float64
     PnL         float64
     Leverage    int     // 0 = невідомо (cross-margin OKX завжди повертає 0)
+    MarginMode  string  // "cross" | "isolated" (з біржового API)
     Fee         float64 // абсолютне значення USDT
     NotionalUsd float64 // повний розмір позиції в USD (ctVal вже врахований)
     OpenedAt    int64   // Unix timestamp ms, 0 = невідомо
@@ -62,6 +63,33 @@ type ClosedTrade struct {
 
 **Важливо (OKX SWAP):** `Quantity` — це `closeTotalPos` (кількість контрактів), не базова монета.
 `NotionalUsd` = `qty × ctVal × entryPrice` — вже правильне значення в USD. Використовувати саме його.
+
+### Position (open)
+```go
+type Position struct {
+    Symbol          string
+    Side            string  // "LONG" | "SHORT"
+    Quantity        float64
+    EntryPrice      float64
+    MarkPrice       float64
+    PnL             float64
+    Leverage        int
+    MarginType      string  // "cross" | "isolated"
+    NotionalEntryUsd float64 // trade_size = qty × ctVal × entryPrice
+    LiqPrice        float64
+}
+```
+
+### InitialMargin helper
+```go
+// exchange.InitialMargin — єдина точка обчислення початкової маржі.
+// Використовується в processPositions, processHistory, WS broadcast.
+func InitialMargin(notionalEntry float64, leverage int) float64 {
+    if leverage <= 0 || notionalEntry <= 0 { return 0 }
+    return notionalEntry / float64(leverage)
+}
+```
+**ROI** = `PnL / InitialMargin(notional, leverage) × 100` — збігається з формулою OKX.
 
 ---
 

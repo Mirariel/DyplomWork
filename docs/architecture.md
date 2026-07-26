@@ -91,8 +91,8 @@ TradeTracker Go — мультибіржовий портфельний трек
 | `/api/orders*`, `/api/smart-orders*`, `/api/bots*`, `/api/dca*` | `trading:8082` |
 | `/api/futures*`, `/api/spot-trades*` | `trading:8082` |
 | `/api/credential-groups*` | `trading:8082` |
-| `/api/ai/*` | `trading:8082` |
 | `/api/analytics*` | `analytics:8083` |
+| `/api/ai/*` | `analytics:8083` |
 
 ---
 
@@ -272,6 +272,7 @@ tradetracker-go/
 │   │   ├── dca_service.go      — Start/Stop/CheckAndBuy
 │   │   └── exchange/           — 6 бірж: Binance, OKX, Bybit, Gate, Kraken, KuCoin
 │   │       ├── interface.go    — Exchange interface: GetBalances/Positions/Prices
+│   │       ├── margin.go       — InitialMargin(notional, leverage) shared helper
 │   │       ├── trader.go       — Trader interface: PlaceOrder/Cancel/Status
 │   │       ├── registry.go     — map[name]Exchange
 │   │       ├── binance.go + binance_trade.go
@@ -299,7 +300,7 @@ tradetracker-go/
 │   └── ws/
 │       ├── hub.go              — реєстр WS-з'єднань (sync.RWMutex)
 │       ├── client.go           — ReadPump + WritePump goroutines
-│       ├── server.go           — broadcast loop (2 s): positions + prices
+│       ├── server.go           — broadcast loop (2 s): positions + prices + top_symbols
 │       └── handler.go          — Fiber WS upgrade
 │
 ├── migrations/                 — SQL файли 000001–000017
@@ -309,17 +310,23 @@ tradetracker-go/
 │   ├── nginx.conf              — SPA routing, /api+/ws+/health proxy → api-gateway:8080, resolver directive
 │   ├── vitest.config.ts        — vitest unit test configuration
 │   └── src/
-│       ├── App.tsx             — React.lazy (11 сторінок) + Suspense
+│       ├── App.tsx             — React.lazy (10 сторінок) + Suspense
 │       ├── api.ts              — 45+ типізованих API функцій
 │       ├── ws.ts               — useWebSocket hook (auto-reconnect 3 s)
 │       ├── context/AuthContext.tsx — user, token, login/logout/updateUser
+│       ├── lib/
+│       │   ├── format.ts       — fmt$, fmtPct, calcRoi, calcRR helpers
+│       │   ├── side.ts         — isLong() normalizer
+│       │   └── useAppliedFilter.ts — draft/applied date filter hook
 │       ├── components/
 │       │   ├── Layout.tsx      — sidebar (9 nav items, Smart Orders removed)
+│       │   ├── PositionsTable.tsx — shared positions table (Dashboard, Futures, Portfolio)
+│       │   ├── StatsPanel.tsx  — trade statistics sidebar panel
 │       │   └── SymbolPanel.tsx — candlestick chart + symbol search + favorites
 │       ├── orders/             — unified order system (types, schemas, adapters, components, tests)
 │       └── pages/              — Login, Register, Dashboard, Portfolio, Orders (unified),
 │                                  GridBots, DCABots, Analytics, Settings,
-│                                  FuturesPositions, SpotTrades
+│                                  FuturesPositions
 │
 ├── monitoring/
 │   ├── prometheus.yml          — 4 scrape targets (api-gateway, market-data, trading, analytics)
@@ -328,7 +335,7 @@ tradetracker-go/
 │       └── dashboards/tradetracker.json  — 10 panels: HTTP rate, latency, WS clients, bots
 │
 ├── Dockerfile                  — один image, 5 бінарників (api-gateway, market-data, trading, analytics, migrate)
-└── docker-compose.yml          — 10 сервісів: db, redis, nats, migrate, 4×Go, frontend, prometheus, grafana
+└── docker-compose.yml          — 11 сервісів: db, redis, nats, migrate, 4×Go, frontend, prometheus, grafana
 ```
 
 ---

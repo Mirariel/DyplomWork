@@ -1436,7 +1436,7 @@ DELETE видаляє всі позиції цієї біржі. Те саме �
 
 ## P-044 — ROI позиції: формула = PnL / початкова маржа
 
-**Коли:** Фаза 19 — уніфікація відображення PnL.
+**Коли:** Фаза 18 — shared components + UX polish.
 
 **Проблема:**
 ROI можна рахувати від ноціоналу (trade_size) або від маржі (margin).
@@ -1463,7 +1463,7 @@ ROI = `PnL / margin × 100`, де margin — початкова маржа (`not
 
 ## P-045 — WS LivePosition: хардкод margin_mode, відсутні TradeSize/Margin
 
-**Коли:** Фаза 19 — уніфікація PositionsTable.
+**Коли:** Фаза 18 — shared components + UX polish.
 
 **Проблема:**
 `internal/ws/server.go` побудова `LivePosition`:
