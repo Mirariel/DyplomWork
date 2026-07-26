@@ -76,6 +76,7 @@ export interface HistoryEntry {
   realized_pnl: number
   fee: number
   max_size: number    // position size in USD (notionalUsd from OKX, or qty×entry fallback)
+  margin: number      // allocated margin = max_size / leverage (0 if leverage unknown)
   opened_at: string | null
   closed_at: string | null
   comment: string | null
@@ -343,9 +344,9 @@ export const changePassword = (current_password: string, new_password: string) =
 export const getPortfolio = () =>
   api.get<PortfolioSummary>('/portfolio').then((r) => r.data)
 
-export const getHistory = (limit = 15, offset = 0, from?: string, to?: string) =>
+export const getHistory = (limit = 15, offset = 0, from?: string, to?: string, exchanges?: string) =>
   api.get<HistoryResponse>('/portfolio/history', {
-    params: { limit, offset, ...(from ? { from } : {}), ...(to ? { to } : {}) },
+    params: { limit, offset, ...(from ? { from } : {}), ...(to ? { to } : {}), ...(exchanges ? { exchanges } : {}) },
   }).then((r) => r.data)
 
 export const getCredentials = () =>

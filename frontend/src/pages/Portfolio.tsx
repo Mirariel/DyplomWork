@@ -14,6 +14,7 @@ import {
 } from '../api'
 import PriceChart from '../components/PriceChart'
 import ExchangeSelector from '../components/ExchangeSelector'
+import { isLong as isLongSide } from '../lib/side'
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -41,11 +42,9 @@ function Spinner() {
 }
 
 function SideBadge({ side }: { side: string }) {
-  const s = side.toLowerCase()
-  const isLong = s === 'long' || s === 'buy'
   return (
     <span className={`text-xs font-semibold px-2 py-0.5 rounded-full ${
-      isLong ? 'bg-green-900/50 text-green-400' : 'bg-red-900/50 text-red-400'
+      isLongSide(side) ? 'bg-green-900/50 text-green-400' : 'bg-red-900/50 text-red-400'
     }`}>
       {side.toUpperCase()}
     </span>
@@ -500,13 +499,14 @@ function HistoryTab() {
 
   if (isLoading) return <Spinner />
 
-  // Per-row computed values — max_size = notionalUsd from OKX (already accounts for ctVal)
+  // Per-row computed values
   const rowData = entries.map((e) => {
     const lev = parseLeverage(e.leverage)
     const levLabel = lev > 0
       ? e.leverage
       : e.margin_mode === 'cross' ? 'Cross' : (e.margin_mode || '—')
-    return { margin: e.max_size, levLabel }
+    const marginModeLabel = e.margin_mode === 'isolated' ? 'Isolated' : 'Cross'
+    return { levLabel, marginModeLabel }
   })
 
   // Aggregate R:R: avgWin / |avgLoss| — matches old project formula
@@ -559,7 +559,7 @@ function HistoryTab() {
           <table className="w-full text-sm">
             <thead>
               <tr className="text-xs text-slate-400 border-b border-slate-700">
-                {['Символ / Плече', 'Біржа', 'Side', 'Маржа', 'Вхід', 'Вихід', 'PnL', 'Закрито', 'Коментар'].map((h) => (
+                {['Символ / Плече', 'Біржа', 'Side', 'Size', 'Тип маржі', 'Вхід', 'Вихід', 'PnL', 'Закрито', 'Коментар'].map((h) => (
                   <th key={h} className="px-4 py-3 text-left font-medium whitespace-nowrap">{h}</th>
                 ))}
               </tr>
@@ -567,12 +567,12 @@ function HistoryTab() {
             <tbody>
               {entries.length === 0 ? (
                 <tr>
-                  <td colSpan={9} className="px-4 py-6 text-slate-500 text-center text-sm">
+                  <td colSpan={10} className="px-4 py-6 text-slate-500 text-center text-sm">
                     Немає закритих угод. Запустіть Sync History для імпорту.
                   </td>
                 </tr>
               ) : entries.map((e, i) => {
-                const { margin, levLabel } = rowData[i]
+                const { levLabel, marginModeLabel } = rowData[i]
                 return (
                   <tr key={e.id} className="border-b border-slate-700/50 hover:bg-slate-700/40 transition-colors">
                     <td className="px-4 py-3">
@@ -581,9 +581,11 @@ function HistoryTab() {
                     </td>
                     <td className="px-4 py-3 text-slate-300 capitalize">{e.exchange}</td>
                     <td className="px-4 py-3"><SideBadge side={e.side} /></td>
-                    <td className="px-4 py-3 text-slate-200 font-medium">
-                      {margin > 0 ? fmt$(margin) : <span className="text-slate-600">—</span>}
+                    <td className="px-4 py-3">
+                      <div className="text-slate-200">{e.max_size > 0 ? fmt$(e.max_size) : <span className="text-slate-600">—</span>}</div>
+                      {e.margin > 0 && <div className="text-xs text-slate-500 mt-0.5">{fmt$(e.margin)}</div>}
                     </td>
+                    <td className="px-4 py-3 text-slate-300">{marginModeLabel}</td>
                     <td className="px-4 py-3 text-slate-300">{fmt$(e.entry_price)}</td>
                     <td className="px-4 py-3 text-slate-300">{fmt$(e.exit_price)}</td>
                     <td className="px-4 py-3"><PnlCell value={e.realized_pnl} /></td>
