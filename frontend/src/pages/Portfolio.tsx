@@ -7,17 +7,18 @@ import {
 import {
   getPortfolio, getHistory, getCredentials,
   addCredential, deleteCredential,
-  updatePositionComment, updateHistoryComment, updateAssetPrice,
+  updateHistoryComment, updateAssetPrice,
   fullSync, getSpotTrades, getSummary,
   type AddCredentialPayload, type Position, type HistoryEntry,
   type Credential, type UserAsset, type SpotTrade,
 } from '../api'
 import PriceChart from '../components/PriceChart'
 import ExchangeSelector from '../components/ExchangeSelector'
-import PositionsTable, { type PosRow } from '../components/PositionsTable'
+import PositionsTable from '../components/PositionsTable'
 import StatsPanel from '../components/StatsPanel'
 import { isLong as isLongSide } from '../lib/side'
-import { fmt$ as fmt$Lib, fmtDate as fmtDateLib, fmtPct as fmtPctLib, parseLeverage, calcRoi } from '../lib/format'
+import { fmt$ as fmt$Lib, fmtDate as fmtDateLib, fmtPct as fmtPctLib, parseLeverage, calcRoi, calcRR } from '../lib/format'
+import { useAppliedFilter } from '../lib/useAppliedFilter'
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -371,49 +372,25 @@ function BalancesTab({ selectedExchange }: { selectedExchange: string }) {
 // ─── Positions tab ─────────────────────────────────────────────────────────────
 
 function PositionsTab({ selectedExchange }: { selectedExchange: string }) {
-  const qc = useQueryClient()
+  const [exchange, setExchange] = useState(selectedExchange)
   const { data, isLoading } = useQuery({ queryKey: ['portfolio'], queryFn: getPortfolio, refetchInterval: 10_000 })
   const positions: Position[] = data?.positions ?? []
 
   const [detail, setDetail] = useState<Position | null>(null)
-  const [draftExchange, setDraftExchange] = useState(selectedExchange)
-  const [appliedExchange, setAppliedExchange] = useState(selectedExchange)
 
-  const exchangeChanged = draftExchange !== appliedExchange
-
-  const applyExchange = () => setAppliedExchange(draftExchange)
-  const clearExchange = () => { setDraftExchange(''); setAppliedExchange('') }
-
-  const filtered = appliedExchange === ALL || !appliedExchange
+  const filtered = exchange === ALL || !exchange
     ? positions
-    : positions.filter((p) => p.exchange === appliedExchange)
+    : positions.filter((p) => p.exchange === exchange)
 
   const totalPnl = filtered.reduce((s, p) => s + p.pnl, 0)
-
-  const commentMutation = useMutation({
-    mutationFn: ({ id, comment }: { id: number; comment: string }) => updatePositionComment(id, comment),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['portfolio'] }),
-  })
 
   if (isLoading) return <Spinner />
 
   return (
     <div>
-      {/* Header with GO filter */}
+      {/* Header */}
       <div className="flex items-center justify-between px-4 py-3 border-b border-slate-700">
-        <div className="flex items-center gap-2">
-          <ExchangeSelector value={draftExchange} onChange={setDraftExchange} className="!py-1.5 !text-xs" />
-          <button onClick={applyExchange} disabled={!exchangeChanged}
-            className="px-3 py-1.5 text-xs font-semibold rounded-lg bg-blue-600 text-white hover:bg-blue-500 disabled:opacity-40 disabled:cursor-not-allowed transition-colors">
-            GO
-          </button>
-          {appliedExchange && (
-            <button onClick={clearExchange}
-              className="text-xs text-slate-500 hover:text-slate-300 p-1 rounded bg-slate-700">
-              <X size={11} />
-            </button>
-          )}
-        </div>
+        <ExchangeSelector value={exchange} onChange={setExchange} className="!py-1.5 !text-xs" />
         <span className="text-sm text-slate-400">
           Total PnL:{' '}
           <span className={`font-semibold ${totalPnl >= 0 ? 'text-green-400' : 'text-red-400'}`}>
@@ -435,21 +412,10 @@ function PositionsTab({ selectedExchange }: { selectedExchange: string }) {
           entryPrice: p.entry_price,
           markPrice: p.mark_price,
           pnl: p.pnl,
-          comment: p.comment,
-          _position: p,
-        } as PosRow & { _position: Position }))}
-        showComment
-        onRowClick={(r) => setDetail((r as PosRow & { _position: Position })._position)}
-        commentRenderer={(r) => {
-          const p = (r as PosRow & { _position: Position })._position
-          return (
-            <EditableComment
-              value={p.comment ?? ''}
-              onSave={(comment) =>
-                commentMutation.mutateAsync({ id: p.id, comment }).then(() => undefined)
-              }
-            />
-          )
+        }))}
+        onRowClick={(r) => {
+          const pos = filtered.find((p) => String(p.id) === r.key)
+          if (pos) setDetail(pos)
         }}
         emptyText="No open positions found."
       />
@@ -466,25 +432,15 @@ function PositionsTab({ selectedExchange }: { selectedExchange: string }) {
 function HistoryTab() {
   const qc = useQueryClient()
   const [offset, setOffset] = useState(0)
-  const [fromDate, setFromDate] = useState('')
-  const [toDate, setToDate]   = useState('')
+  const { draft, applied, draftChanged, applyPreset, applyFilters: rawApply, clearFilters: rawClear, setFrom, setTo } = useAppliedFilter()
   const LIMIT = 15
 
-  const resetOffset = () => setOffset(0)
-
-  const applyPreset = (days: number) => {
-    const to   = new Date()
-    const from = new Date()
-    from.setDate(from.getDate() - (days - 1))
-    const fmt = (d: Date) => d.toISOString().slice(0, 10)
-    setFromDate(fmt(from))
-    setToDate(fmt(to))
-    resetOffset()
-  }
+  const applyFilters = () => { rawApply(); setOffset(0) }
+  const clearFilters = () => { rawClear(); setOffset(0) }
 
   const { data, isLoading } = useQuery({
-    queryKey: ['history', LIMIT, offset, fromDate, toDate],
-    queryFn: () => getHistory(LIMIT, offset, fromDate || undefined, toDate || undefined),
+    queryKey: ['history', LIMIT, offset, applied.from, applied.to],
+    queryFn: () => getHistory(LIMIT, offset, applied.from || undefined, applied.to || undefined),
   })
 
   const commentMutation = useMutation({
@@ -494,8 +450,8 @@ function HistoryTab() {
 
   // analytics panel — same date range as table
   const { data: summary } = useQuery({
-    queryKey: ['analytics-summary', fromDate, toDate],
-    queryFn: () => getSummary(0, '', fromDate || undefined, toDate || undefined),
+    queryKey: ['analytics-summary', applied.from, applied.to],
+    queryFn: () => getSummary(0, '', applied.from || undefined, applied.to || undefined),
     staleTime: 60_000,
   })
 
@@ -516,10 +472,7 @@ function HistoryTab() {
     return { levLabel, marginModeLabel }
   })
 
-  // Aggregate R:R: avgWin / |avgLoss| — matches old project formula
-  const aggRR = summary && summary.avg_loss < 0
-    ? summary.avg_win / Math.abs(summary.avg_loss)
-    : null
+  const aggRR = summary ? calcRR(summary) : null
 
   return (
     <div className="flex gap-0">
@@ -531,8 +484,12 @@ function HistoryTab() {
           {[{ label: '1d', days: 1 }, { label: '7d', days: 7 }, { label: '1m', days: 30 }, { label: '3m', days: 90 }].map((p) => (
             <button
               key={p.label}
-              onClick={() => applyPreset(p.days)}
-              className="px-2.5 py-1 text-xs font-medium rounded-lg bg-slate-700 text-slate-400 hover:bg-slate-600 hover:text-white transition-colors"
+              onClick={() => { applyPreset(p.label, p.days); setOffset(0) }}
+              className={`px-2.5 py-1 text-xs font-medium rounded-lg transition-colors ${
+                draft.preset === p.label
+                  ? 'bg-blue-600 text-white'
+                  : 'bg-slate-700 text-slate-400 hover:bg-slate-600 hover:text-white'
+              }`}
             >
               {p.label}
             </button>
@@ -540,21 +497,24 @@ function HistoryTab() {
           <span className="text-slate-700 text-xs">|</span>
           <input
             type="date"
-            value={fromDate}
-            onChange={(e) => { setFromDate(e.target.value); resetOffset() }}
+            value={draft.from}
+            onChange={(e) => setFrom(e.target.value)}
             className="text-xs bg-slate-700 border border-slate-600 text-slate-300 rounded-lg px-2 py-1.5 focus:outline-none focus:border-blue-500"
           />
           <span className="text-slate-600 text-xs">—</span>
           <input
             type="date"
-            value={toDate}
-            onChange={(e) => { setToDate(e.target.value); resetOffset() }}
+            value={draft.to}
+            onChange={(e) => setTo(e.target.value)}
             className="text-xs bg-slate-700 border border-slate-600 text-slate-300 rounded-lg px-2 py-1.5 focus:outline-none focus:border-blue-500"
           />
-          {(fromDate || toDate) && (
-            <button
-              onClick={() => { setFromDate(''); setToDate(''); resetOffset() }}
-              className="text-xs text-slate-500 hover:text-slate-300 px-2 py-1 rounded bg-slate-700"
+          <button onClick={applyFilters} disabled={!draftChanged}
+            className="px-3 py-1 text-xs font-semibold rounded-lg bg-blue-600 text-white hover:bg-blue-500 disabled:opacity-40 disabled:cursor-not-allowed transition-colors">
+            GO
+          </button>
+          {(applied.from || applied.to) && (
+            <button onClick={clearFilters}
+              className="text-xs text-slate-500 hover:text-slate-300 p-1 rounded bg-slate-700"
             >
               <X size={11} />
             </button>
@@ -635,7 +595,7 @@ function HistoryTab() {
           <StatsPanel
             summary={summary}
             aggRR={aggRR}
-            title={fromDate || toDate ? 'Статистика за період' : 'Загальна статистика'}
+            title={applied.from || applied.to ? 'Статистика за період' : 'Загальна статистика'}
           />
         ) : (
           <div className="text-xs text-slate-600">Завантаження…</div>
