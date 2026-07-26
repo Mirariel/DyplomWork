@@ -104,7 +104,9 @@ TradeTracker Go — мультибіржовий портфельний трек
 |---|---|
 | Sync endpoints | `POST /api/sync/{full,positions,history}`, `GET /api/sync/prices` |
 | Price scheduler | Кожні 30 с: `UpdateAllAssets()` → MySQL + Redis, потім publish NATS `market.prices.updated` |
-| User sync scheduler | Кожні 15 хв: `SyncAllUsers()` — паралельний синк усіх зареєстрованих юзерів |
+| sync-live scheduler | Кожні 45 с (configurable): `SyncPositions` + `SyncBalances` лише для юзерів з активним WS → publish `portfolio.synced` |
+| sync-deep scheduler | Кожні 15 хв (configurable): `SyncAllUsers()` — повний синк усіх зареєстрованих юзерів → publish `portfolio.synced` |
+| NATS subscribe | `gateway.active-users` → оновлює локальний список активних user_id |
 | Auth | `InternalAuth` middleware — читає `X-Internal-User-ID` (не валідує JWT) |
 
 ---
@@ -158,6 +160,34 @@ type PricesMsg struct {
 |---|---|
 | **Publisher** | `market-data` — кожні 30 с після оновлення Redis |
 | **Subscriber** | `trading` — викликає `CheckAndTrigger()` для smart orders |
+
+### Топік `gateway.active-users`
+
+```go
+type ActiveUsersMsg struct {
+    UserIDs []int64   `json:"user_ids"`
+    At      time.Time `json:"at"`
+}
+```
+
+| Роль | Дія |
+|---|---|
+| **Publisher** | `api-gateway` — кожні 10 с, список user_id з активним WS |
+| **Subscriber** | `market-data` — оновлює локальний реєстр для sync-live |
+
+### Топік `portfolio.synced`
+
+```go
+type PortfolioSyncedMsg struct {
+    UserID int64  `json:"user_id"`
+    Kind   string `json:"kind"` // "live" or "deep"
+}
+```
+
+| Роль | Дія |
+|---|---|
+| **Publisher** | `market-data` — після успішного sync-live або sync-deep |
+| **Subscriber** | `api-gateway` — пушить `{type:"synced"}` у WS клієнта → фронтенд invalidates кеш |
 
 **Моніторинг:** `http://localhost:8222` — NATS HTTP monitoring UI.
 
@@ -272,7 +302,7 @@ tradetracker-go/
 │       ├── server.go           — broadcast loop (2 s): positions + prices
 │       └── handler.go          — Fiber WS upgrade
 │
-├── migrations/                 — SQL файли 000001–000014
+├── migrations/                 — SQL файли 000001–000017
 │
 ├── frontend/
 │   ├── Dockerfile              — node:20-alpine → nginx:1.27-alpine
@@ -388,6 +418,9 @@ if !ok {
 | `orders` (credential_id, leverage) | trading | 000014 |
 | `smart_orders` (credential_id, leverage) | trading | 000014 |
 | `external_api_credentials` (dropped unique constraint) | trading | 000014 |
+| `position_history` (margin column) | market-data | 000015 |
+| `open_positions` (real margin from exchange) | market-data | 000016 |
+| `position_history` (backfill margin for existing rows) | market-data | 000017 |
 
 > Shared database — прагматичний підхід для дипломного проєкту.
 > Повна ізоляція БД (окрема схема/інстанс на сервіс) — природний наступний крок.

@@ -117,6 +117,9 @@ Prometheus метрики (text/plain format).
 | offset | int | 0 |
 | from | string (ISO date) | — |
 | to | string (ISO date) | — |
+| exchanges | string (comma-separated) | — (all) |
+
+Параметр `exchanges` фільтрує по біржах: `exchanges=okx,binance`. Порожнє значення = всі біржі.
 
 Кожен запис включає поле `max_size` — розмір позиції в USD (notionalUsd від OKX або qty×entryPrice як fallback).
 

@@ -1189,3 +1189,186 @@ docker compose up -d frontend market-data trading
 При роботі з Docker Compose ніколи не плутати локальний build з build всередині контейнера. Зміни набирають чинності лише після `docker compose build <service>` + `docker compose up -d <service>`. Для швидкої розробки frontend — використовувати `npm run dev` (Vite dev server на :5173) без Docker, а збирати Docker образ тільки при релізі.
 
 **Зачеплені файли:** `docker-compose.yml`, `frontend/Dockerfile`
+
+---
+
+## P-037 — Hardcoded margin_mode "cross" у sync_service.go
+
+**Коли:** Фаза 17.2, дослідження чому колонка "Margin" у History показує обсяг позиції замість маржі.
+
+**Проблема:**
+`processPositions` (рядок 370) і `processHistory` (рядок 410) хардкодили `MarginMode: "cross"`, ігноруючи реальне значення з біржових адаптерів. OKX вже парсив `mgnMode` у `posHistItem` і заповнював `Position.MarginType`, але sync_service їх не використовував.
+
+Додатково, колонка "Margin" на фронті показувала `e.max_size` (notional USD = обсяг позиції), а не реальну виділену маржу (`notional / leverage`). Коли плече невідоме (0), формула не може обчислити маржу — тому показується "—".
+
+**Рішення:**
+1. Додано `MarginMode` поле в `exchange.ClosedTrade` — OKX, Binance, Bybit заповнюють його.
+2. `processPositions` тепер бере `p.MarginType`, `processHistory` — `t.MarginMode` (з фолбеком "cross").
+3. Нова колонка `margin DECIMAL(20,8)` у `position_history` (міграція 000015) — зберігає `maxSize / leverage`.
+4. Frontend: окрема колонка "Size" для обсягу, "Маржа" показує реальну маржу + тип (Cross/Isolated).
+
+**Урок:**
+Ніколи не хардкодити значення, які приходять з API. Навіть якщо "зараз все cross" — це зміниться, як тільки юзер відкриє isolated-позицію. Зберігати все, що повертає біржа, навіть якщо UI поки не використовує.
+
+**Зачеплені файли:** `internal/services/exchange/interface.go`, `internal/services/exchange/okx.go`, `internal/services/exchange/binance.go`, `internal/services/exchange/bybit.go`, `internal/services/sync_service.go`, `internal/services/sync_repository.go`, `internal/models/portfolio.go`, `migrations/000015_history_margin.up.sql`, `frontend/src/api.ts`, `frontend/src/pages/Portfolio.tsx`
+
+---
+
+## P-038 — `margin_mode` не оновлюється в `ON DUPLICATE KEY UPDATE` (position_history)
+
+**Коли:** Фаза 18, дослідження чому `margin_mode` завжди "cross" у position_history.
+
+**Проблема:**
+`insertHistory` (sync_repository.go) виконує `INSERT ... ON DUPLICATE KEY UPDATE`,
+але блок `UPDATE` **не містив** `margin_mode`:
+
+```sql
+ON DUPLICATE KEY UPDATE
+    leverage   = IF(VALUES(leverage) != '0x', VALUES(leverage), leverage),
+    fee        = ...,
+    margin     = ...,
+    opened_at  = ...,
+    max_size   = VALUES(max_size)
+    -- margin_mode ВІДСУТНІЙ!
+```
+
+Рядки, вставлені зі старим хардкодом `"cross"` (до виправлення P-037), ніколи не оновлювались
+на реальне значення, навіть коли наступний синк приносив правильний `margin_mode`.
+
+**Рішення:**
+Додати `margin_mode = VALUES(margin_mode)` до `ON DUPLICATE KEY UPDATE`.
+
+**Урок:**
+При додаванні нових колонок або виправленні значень — завжди перевіряти не лише `INSERT`,
+але й `ON DUPLICATE KEY UPDATE`. Пропущена колонка в UPDATE — це "невидимий" баг:
+дані вставляються правильно для нових рядків, але ніколи не виправляються для існуючих.
+
+**Зачеплені файли:** `internal/services/sync_repository.go`
+
+---
+
+## P-039 — margin = 0 для угод з fallback leverage (position_history)
+
+**Коли:** Фаза 18, дослідження чому margin = 0 для деяких OKX угод у position_history.
+
+**Проблема:**
+`processHistory` (sync_service.go:415) обчислював `margin = maxSize / leverage` **до** виклику
+`insertHistory`, але `insertHistory` підтягував leverage з `open_positions` через fallback:
+
+```go
+// sync_service.go — обчислення маржі з leverage=0 → margin=0
+if t.Leverage > 0 {
+    margin = maxSize / float64(t.Leverage)  // OKX: lever=0 → не виконується
+}
+
+// sync_repository.go — insertHistory підставляє реальне плече з open_positions
+if h.Leverage == "0x" {
+    h.Leverage = lev  // "10x" з open_positions
+}
+// АЛЕ margin вже зафіксований як 0!
+```
+
+Тобто leverage виправлявся, а margin — ні.
+
+**Рішення:**
+Перенести перерахунок маржі в `insertHistory` — після патчу `h.Leverage`:
+```go
+if h.Margin == 0 {
+    lev := parseLeverageStr(h.Leverage)
+    if lev > 0 { h.Margin = h.MaxSize / lev }
+}
+```
+У `processHistory` лишити обчислення лише як первинне (коли плече відоме одразу).
+
+**Урок:**
+Обчислення похідних значень (margin) повинні відбуватися **після** всіх fallback-підстановок
+(leverage з open_positions). Інакше fallback виправляє вхідні дані, а похідне значення
+залишається розрахованим на основі старих (неправильних) вхідних.
+
+**Зачеплені файли:** `internal/services/sync_repository.go`, `internal/services/sync_service.go`
+
+---
+
+## P-040 — Реальна маржа з біржі губиться (exchange.Position не має поля Margin)
+
+**Коли:** Фаза 18, дослідження чому margin в open_positions завжди 0.
+
+**Проблема:**
+Біржові адаптери (okx.go, binance.go, bybit.go) вже парсили поля з реальною маржею:
+- OKX: `margin`, `imr` з `/api/v5/account/positions`
+- Binance: `isolatedMargin` з `/fapi/v2/positionRisk`
+- Bybit: `positionIM` з `/v5/position/list`
+
+Але `exchange.Position` не мав відповідних полів, тому значення **відкидались** при створенні структури.
+
+Для ізольованих позицій з долитою вільною маржею формула `notional/leverage` давала **неправильний**
+результат — реальна маржа більша за notional/leverage (бо юзер вручну додав маржу).
+
+При закритті позиції (deleteStalePositions бачить що біржа її більше не повертає) останнє відоме
+значення margin зникало разом з рядком — position_history не мав звідки його взяти.
+
+**Рішення:**
+1. Додати `Margin float64` і `InitialMargin float64` в `exchange.Position`
+2. OKX — заповнити з `p.Margin` і `p.Imr`
+3. Binance — заповнити з `isolatedMargin` (fallback `notional/leverage` для cross)
+4. Bybit — заповнити з `positionIM`
+5. `processPositions` — зберігати `p.Margin` у `open_positions`
+6. Новий метод `transferMarginToHistory` — перед `deleteStalePositions` переносить
+   останнє відоме margin у position_history
+7. `notional/leverage` залишається лише як фолбек для позицій без даних від біржі
+8. Міграція 000016 (маркер), міграція 000017 (бекфіл margin для існуючих рядків history)
+
+**Урок:**
+Якщо біржа повертає поле — зберігати його, навіть якщо поки є обчислювальний fallback.
+Для ізольованих позицій з manual margin add формула `notional/leverage` = неправильна.
+Перед видаленням рядка з однієї таблиці — перенести потрібні дані в пов'язану таблицю.
+
+**Зачеплені файли:** `internal/services/exchange/interface.go`, `internal/services/exchange/okx.go`,
+`internal/services/exchange/binance.go`, `internal/services/exchange/bybit.go`,
+`internal/services/sync_service.go`, `internal/services/sync_repository.go`,
+`migrations/000016_open_positions_margin.up.sql`, `migrations/000017_backfill_history_margin.up.sql`,
+`frontend/src/pages/Portfolio.tsx`
+
+---
+
+## P-041 — Безумовний DELETE stale після мовчазної помилки API біржі
+
+**Коли:** Фаза 18, дослідження зникнення відкритих позицій на вкладці Futures.
+
+**Проблема:**
+`SyncPositions` (sync_service.go) ігнорував помилку з `ex.GetOpenPositions()`:
+```go
+if positions, err := ex.GetOpenPositions(c.creds); err == nil {
+    s.processPositions(...)
+}
+// err != nil — мовчки ігнорується, жодного логу
+```
+А `deleteStalePositions(userID, syncStart)` виконувався **після** WaitGroup для **всіх** бірж
+одночасно:
+```go
+s.repo.deleteStalePositions(userID, syncStart) // DELETE WHERE user_id=? AND updated_at < ?
+```
+Один таймаут OKX → processPositions не виконується → updated_at не оновлюється →
+DELETE видаляє всі позиції цієї біржі. Те саме для SyncUser і SyncBalances.
+З інтервалом sync-live 45 с це стало помітно — позиції зникали і з'являлись.
+
+**Рішення:**
+1. `deleteStalePositions` і `deleteStaleBalances` — додано параметр `exchange`:
+   ```sql
+   DELETE FROM open_positions WHERE user_id = ? AND exchange = ? AND updated_at < ?
+   ```
+2. Stale cleanup перенесено **всередину горутини** кожної біржі, одразу після
+   успішного processPositions / processBalances.
+3. При помилці — логування через `s.logger.Warn` і інкремент Prometheus
+   `sync_exchange_errors_total{exchange, operation}`.
+4. Скопійовано патерн з `syncFuturesExchange` де cleanup вже був per-exchange.
+
+**Урок:**
+Ніколи не виконувати безумовний DELETE на основі timestamp після операції, яка може мовчки
+провалитись. Патерн "fetch → upsert → delete stale" вимагає що DELETE відбувається
+**тільки при успішному fetch**, і **тільки для конкретної біржі**, а не для всіх одразу.
+Додатково — завжди логувати помилки з API бірж. "Мовчазна помилка + безумовний cleanup"
+= гарантоване видалення даних при першому ж таймауті.
+
+**Зачеплені файли:** `internal/services/sync_service.go`, `internal/services/sync_repository.go`,
+`internal/metrics/metrics.go`

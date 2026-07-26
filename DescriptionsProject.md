@@ -198,7 +198,7 @@ tradetracker-go/
 │   ├── 000002_orders           — orders table
 │   ├── 000003_smart_orders     — smart_orders table
 │   ├── 000004_bots             — bots + bot_grids tables
-│   ├── 000005_snapshots        — portfolio_snapshots table
+│   ├── 000005_analytics        — portfolio_snapshots table
 │   ├── 000006_dca_bots         — dca_bots table
 │   ├── 000007_credentials_label — label + api_key_hint колонки в external_api_credentials
 │   ├── 000008_futures_positions — futures_positions table (DECIMAL(20,8), leverage INT, margin_type)
@@ -206,7 +206,7 @@ tradetracker-go/
 │   ├── 000010_snapshot_datetime    — snapshot_date DATE → snapshot_at DATETIME + unique key
 │   ├── 000011_snapshot_no_unique   — drop unique constraint on portfolio_snapshots (INSERT замість UPSERT)
 │   ├── 000012_snapshot_exchange    — exchange column в portfolio_snapshots + index
-│   ├── 000013_history_leverage_fix — UPDATE SET leverage='0x' WHERE leverage='1x' AND exchange='okx'
+│   ├── 000013_history_leverage_fix — UPDATE SET leverage='0x' WHERE leverage='1x' AND exchange='okx' 
 │   └── 000014_unified_orders       — credential_groups + credential_group_members tables; credential_id + leverage on orders/smart_orders
 │
 ├── frontend/
@@ -510,6 +510,23 @@ GET    /ws   (WebSocket)
 - [x] Size % mode — orders can specify amount as % of deposit (`amount_pct`)
 - [x] Nginx DNS fix — resolver directive to prevent stale IP caching
 - [x] Settings.tsx — credential groups management section
+
+### Фаза 17.1 — Auto-Sync (Live + Deep) ✅
+- [x] Config: `SyncLiveInterval` (default 45s), `SyncDeepInterval` (default 15m) via env vars
+- [x] NATS topics: `gateway.active-users` (heartbeat every 10s from api-gateway), `portfolio.synced` (per-user notification after sync)
+- [x] Hub.ActiveUserIDs() + Hub.SendToUser() — exported methods for NATS integration
+- [x] api-gateway: publishes active user IDs via NATS; subscribes to `portfolio.synced` → pushes `{type:"synced"}` to user WS
+- [x] market-data scheduler: `sync-live` (positions+balances for active WS users), `sync-deep` (full SyncAllUsers for all)
+- [x] Frontend ws.ts: handles `synced` message → invalidates portfolio/futures/history/summary/chart queries
+- [x] Dashboard: "Sync All" → "Refresh now"; removed 15-minute references from chart hints
+
+### Фаза 17.2 — History Margin Fix ✅
+- [x] Migration 000015: `margin DECIMAL(20,8)` column in `position_history`
+- [x] Added `MarginMode` field to `exchange.ClosedTrade`; filled in OKX/Binance/Bybit adapters
+- [x] Removed hardcoded `"cross"` in `processPositions` (now uses `p.MarginType`) and `processHistory` (now uses `t.MarginMode`)
+- [x] Compute real margin = `maxSize / leverage` during sync, stored in DB
+- [x] Frontend: `HistoryEntry.margin` field; Portfolio History table shows "Size" (notional) + "Маржа" (allocated margin + margin mode label)
+- [x] Bybit adapter: now parses leverage from closed-pnl endpoint
 
 ### Фаза 18 — Майбутнє
 - [ ] **Forgot Password / Reset Password** — endpoint `POST /api/auth/forgot-password` (скидання пароля за email), сторінка на фронтенді; наразі відновлення можливе лише вручну через БД
