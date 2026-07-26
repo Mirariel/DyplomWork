@@ -22,7 +22,6 @@ type SyncService struct {
 	encryption    *EncryptionService
 	exchanges     map[string]exchange.Exchange
 	repo          *syncRepository
-	futuresRepo   *models.FuturesPositionRepository
 	spotTradeRepo *models.SpotTradeRepository
 	logger        *slog.Logger
 
@@ -40,7 +39,6 @@ func NewSyncService(db *sqlx.DB, enc *EncryptionService, logger *slog.Logger) *S
 		encryption:    enc,
 		exchanges:     exchange.Registry(),
 		repo:          newSyncRepository(db),
-		futuresRepo:   models.NewFuturesPositionRepository(db),
 		spotTradeRepo: models.NewSpotTradeRepository(db),
 		logger:        logger,
 		cooldownAt:    make(map[string]time.Time),
@@ -267,91 +265,6 @@ func (s *SyncService) SyncRecentHistory(userID int64, days int) error {
 	return nil
 }
 
-// SyncFuturesForUser синхронізує ф'ючерсні позиції одного користувача з усіх бірж.
-// Викликається після додавання credentials (auto-discovery) або за розкладом.
-func (s *SyncService) SyncFuturesForUser(userID int64) error {
-	creds, err := s.getCredentials(userID)
-	if err != nil || len(creds) == 0 {
-		return err
-	}
-
-	var wg sync.WaitGroup
-	for _, c := range creds {
-		wg.Add(1)
-		go func(c credWithKeys) {
-			defer wg.Done()
-			s.syncFuturesExchange(userID, c)
-		}(c)
-	}
-	wg.Wait()
-	return nil
-}
-
-// SyncFuturesAllUsers синхронізує ф'ючерсні позиції всіх активних користувачів.
-// Використовується фоновим scheduler'ом (30 s).
-func (s *SyncService) SyncFuturesAllUsers() {
-	var userIDs []int64
-	if err := s.db.Select(&userIDs,
-		"SELECT DISTINCT user_id FROM external_api_credentials WHERE is_active = 1",
-	); err != nil {
-		s.logger.Error("futures sync: get users", "error", err)
-		return
-	}
-	for _, id := range userIDs {
-		if err := s.SyncFuturesForUser(id); err != nil {
-			s.logger.Error("futures sync: user failed", "user_id", id, "error", err)
-		}
-	}
-}
-
-func (s *SyncService) syncFuturesExchange(userID int64, c credWithKeys) {
-	ex := s.getExchange(c.cred.Exchange)
-	if ex == nil {
-		return
-	}
-
-	syncStart := time.Now()
-
-	positions, err := ex.GetOpenPositions(c.creds)
-	if err != nil {
-		s.logSyncError(err, c.cred.Exchange, "futures_positions", userID)
-		return
-	}
-
-	for _, p := range positions {
-		side := strings.ToUpper(p.Side)
-		if side != "LONG" && side != "SHORT" {
-			side = "LONG"
-		}
-		marginType := p.MarginType
-		if marginType == "" {
-			marginType = "cross"
-		}
-		fp := &models.FuturesPosition{
-			UserID:        userID,
-			Exchange:      c.cred.Exchange,
-			Symbol:        p.Symbol,
-			Side:          side,
-			Size:          p.Quantity,
-			EntryPrice:    p.EntryPrice,
-			MarkPrice:     p.MarkPrice,
-			UnrealizedPnl: p.PnL,
-			Leverage:      p.Leverage,
-			MarginType:    marginType,
-		}
-		if err := s.futuresRepo.Upsert(fp); err != nil {
-			s.logger.Error("futures sync: upsert", "symbol", p.Symbol, "error", err)
-		}
-	}
-
-	// Видаляємо позиції, що зникли з біржі (закриті)
-	if err := s.futuresRepo.DeleteStale(userID, c.cred.Exchange, syncStart); err != nil {
-		s.logger.Error("futures sync: delete stale", "exchange", c.cred.Exchange, "error", err)
-	}
-
-	s.logger.Info("futures sync: done", "exchange", c.cred.Exchange, "positions", len(positions))
-}
-
 // --- internal ---
 
 func (s *SyncService) syncExchangeFull(userID int64, c credWithKeys, syncStart time.Time) error {
@@ -444,11 +357,10 @@ func (s *SyncService) processPositions(userID int64, positions []exchange.Positi
 			marginMode = "cross"
 		}
 
-		// Маржа: спочатку реальне значення з біржі, фолбек — notional/leverage
-		margin := p.Margin
-		if margin == 0 && p.Leverage > 0 {
-			notional := p.Quantity * p.EntryPrice
-			margin = notional / float64(p.Leverage)
+		// Початкова маржа = notional_at_entry / leverage
+		margin := 0.0
+		if p.Leverage > 0 && p.NotionalEntryUsd > 0 {
+			margin = p.NotionalEntryUsd / float64(p.Leverage)
 		}
 
 		row := positionRow{
@@ -499,10 +411,14 @@ func (s *SyncService) processHistory(userID int64, trades []exchange.ClosedTrade
 			marginMode = "cross"
 		}
 
-		// margin = notional / leverage (виділена маржа під позицію)
+		// Початкова маржа = notional_at_entry / leverage (не maxSize, який при close price)
 		var margin float64
+		notionalEntry := t.NotionalEntryUsd
+		if notionalEntry == 0 {
+			notionalEntry = t.Quantity * t.EntryPrice // fallback for non-OKX
+		}
 		if t.Leverage > 0 {
-			margin = maxSize / float64(t.Leverage)
+			margin = notionalEntry / float64(t.Leverage)
 		}
 
 		row := historyRow{

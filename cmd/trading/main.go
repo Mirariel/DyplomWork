@@ -77,7 +77,6 @@ func main() {
 	botRepo          := models.NewBotRepository(db)
 	snapshotRepo     := models.NewSnapshotRepository(db)
 	dcaBotRepo       := models.NewDCABotRepository(db)
-	futuresRepo      := models.NewFuturesPositionRepository(db)
 	spotTradeRepo    := models.NewSpotTradeRepository(db)
 	credGroupRepo    := models.NewCredentialGroupRepository(db)
 
@@ -94,15 +93,15 @@ func main() {
 	// Handlers
 	portfolioHandler  := handlers.NewPortfolioHandler(portfolioRepo, enc)
 	portfolioHandler.SetCredentialHook(func(userID int64) {
-		if err := syncService.SyncFuturesForUser(userID); err != nil {
-			logger.Error("auto-discovery: futures sync failed", "user_id", userID, "error", err)
+		if err := syncService.SyncPositions(userID); err != nil {
+			logger.Error("auto-discovery: positions sync failed", "user_id", userID, "error", err)
 		}
 	})
 	orderHandler      := handlers.NewOrderHandler(orderRepo, portfolioRepo, enc, logger)
 	smartOrderHandler := handlers.NewSmartOrderHandler(smartOrderRepo, portfolioRepo, enc)
 	botHandler        := handlers.NewBotHandler(botRepo, botService, priceService)
 	dcaHandler        := handlers.NewDCAHandler(dcaBotRepo, dcaService)
-	futuresHandler    := handlers.NewFuturesHandler(futuresRepo)
+	futuresHandler    := handlers.NewFuturesHandler(portfolioRepo)
 	spotTradesHandler := handlers.NewSpotTradesHandler(spotTradeRepo)
 	credGroupHandler  := handlers.NewCredentialGroupHandler(credGroupRepo)
 
@@ -127,13 +126,6 @@ func main() {
 	})
 
 	sched.Register(
-		scheduler.Job{
-			Name:     "futures-sync",
-			Interval: 30 * time.Second,
-			Fn: func(ctx context.Context) {
-				syncService.SyncFuturesAllUsers()
-			},
-		},
 		scheduler.Job{
 			Name:     "grid-bots",
 			Interval: 10 * time.Second,
