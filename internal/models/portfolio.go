@@ -1,6 +1,7 @@
 package models
 
 import (
+	"strings"
 	"time"
 
 	"github.com/jmoiron/sqlx"
@@ -151,8 +152,9 @@ func (r *PortfolioRepository) GetHistoryCount(userID int64) (int, error) {
 	return count, err
 }
 
-// GetHistoryFiltered — з опціональним фільтром дат (from/to у форматі YYYY-MM-DD або порожній).
-func (r *PortfolioRepository) GetHistoryFiltered(userID int64, limit, offset int, from, to string) ([]PositionHistory, error) {
+// GetHistoryFiltered — з опціональним фільтром дат (from/to у форматі YYYY-MM-DD або порожній)
+// та фільтром бірж (exchanges = "okx,binance" або порожнє = всі).
+func (r *PortfolioRepository) GetHistoryFiltered(userID int64, limit, offset int, from, to, exchanges string) ([]PositionHistory, error) {
 	query := `SELECT * FROM position_history WHERE user_id = ?`
 	args := []interface{}{userID}
 	if from != "" {
@@ -163,14 +165,21 @@ func (r *PortfolioRepository) GetHistoryFiltered(userID int64, limit, offset int
 		query += ` AND closed_at < DATE_ADD(?, INTERVAL 1 DAY)`
 		args = append(args, to)
 	}
+	if exchanges != "" {
+		exList := splitExchanges(exchanges)
+		q, a, _ := sqlx.In(` AND exchange IN (?)`, exList)
+		query += q
+		args = append(args, a...)
+	}
 	query += ` ORDER BY closed_at DESC LIMIT ? OFFSET ?`
 	args = append(args, limit, offset)
+	query = r.db.Rebind(query)
 	items := make([]PositionHistory, 0)
 	err := r.db.Select(&items, query, args...)
 	return items, err
 }
 
-func (r *PortfolioRepository) GetHistoryFilteredCount(userID int64, from, to string) (int, error) {
+func (r *PortfolioRepository) GetHistoryFilteredCount(userID int64, from, to, exchanges string) (int, error) {
 	query := `SELECT COUNT(*) FROM position_history WHERE user_id = ?`
 	args := []interface{}{userID}
 	if from != "" {
@@ -181,9 +190,29 @@ func (r *PortfolioRepository) GetHistoryFilteredCount(userID int64, from, to str
 		query += ` AND closed_at < DATE_ADD(?, INTERVAL 1 DAY)`
 		args = append(args, to)
 	}
+	if exchanges != "" {
+		exList := splitExchanges(exchanges)
+		q, a, _ := sqlx.In(` AND exchange IN (?)`, exList)
+		query += q
+		args = append(args, a...)
+	}
+	query = r.db.Rebind(query)
 	var count int
 	err := r.db.Get(&count, query, args...)
 	return count, err
+}
+
+// splitExchanges розділяє "okx,binance" → []interface{}{"okx", "binance"}
+func splitExchanges(s string) []interface{} {
+	parts := strings.Split(s, ",")
+	result := make([]interface{}, 0, len(parts))
+	for _, p := range parts {
+		p = strings.TrimSpace(p)
+		if p != "" {
+			result = append(result, p)
+		}
+	}
+	return result
 }
 
 func (r *PortfolioRepository) GetCredentials(userID int64) ([]ExternalApiCredential, error) {

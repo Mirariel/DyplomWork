@@ -55,19 +55,20 @@ func (h *PortfolioHandler) GetPortfolio(c *fiber.Ctx) error {
 	})
 }
 
-// GET /api/portfolio/history?limit=15&offset=0&from=YYYY-MM-DD&to=YYYY-MM-DD
+// GET /api/portfolio/history?limit=15&offset=0&from=YYYY-MM-DD&to=YYYY-MM-DD&exchanges=okx,binance
 func (h *PortfolioHandler) GetHistory(c *fiber.Ctx) error {
-	userID := middleware.GetUserID(c)
-	limit  := c.QueryInt("limit", 15)
-	offset := c.QueryInt("offset", 0)
-	from   := c.Query("from")
-	to     := c.Query("to")
+	userID    := middleware.GetUserID(c)
+	limit     := c.QueryInt("limit", 15)
+	offset    := c.QueryInt("offset", 0)
+	from      := c.Query("from")
+	to        := c.Query("to")
+	exchanges := c.Query("exchanges") // "okx,binance" or empty = all
 
-	history, err := h.repo.GetHistoryFiltered(userID, limit, offset, from, to)
+	history, err := h.repo.GetHistoryFiltered(userID, limit, offset, from, to, exchanges)
 	if err != nil {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": err.Error()})
 	}
-	total, err := h.repo.GetHistoryFilteredCount(userID, from, to)
+	total, err := h.repo.GetHistoryFilteredCount(userID, from, to, exchanges)
 	if err != nil {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": err.Error()})
 	}
