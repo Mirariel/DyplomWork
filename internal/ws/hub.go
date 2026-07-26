@@ -53,6 +53,29 @@ func (h *Hub) ClientCount() int {
 	return len(h.clients)
 }
 
+// ActiveUserIDs повертає список унікальних user_id з активними WS-з'єднаннями.
+func (h *Hub) ActiveUserIDs() []int64 {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+
+	seen := make(map[int64]struct{})
+	for c := range h.clients {
+		if c.userID > 0 {
+			seen[c.userID] = struct{}{}
+		}
+	}
+	ids := make([]int64, 0, len(seen))
+	for id := range seen {
+		ids = append(ids, id)
+	}
+	return ids
+}
+
+// SendToUser exposes sendToUser for use by other packages (e.g. NATS handler).
+func (h *Hub) SendToUser(userID int64, data []byte) {
+	h.sendToUser(userID, data)
+}
+
 // sendToUser надсилає повідомлення всім з'єднанням конкретного користувача.
 func (h *Hub) sendToUser(userID int64, data []byte) {
 	h.mu.RLock()

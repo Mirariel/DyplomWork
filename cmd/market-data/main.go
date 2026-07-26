@@ -10,9 +10,11 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"log/slog"
 	"os"
 	"os/signal"
+	"sync"
 	"syscall"
 	"time"
 
@@ -94,6 +96,30 @@ func main() {
 	// Підтягнути топ символи одразу при старті (не чекати першу годину)
 	go topSvc.FetchTopSymbols()
 
+	// ── Active users registry (populated via NATS from api-gateway) ──────────
+	var activeUsersMu sync.RWMutex
+	activeUserIDs := make([]int64, 0)
+
+	if _, err := bus.Subscribe(natspkg.SubjActiveUsers, func(data []byte) {
+		var msg natspkg.ActiveUsersMsg
+		if err := json.Unmarshal(data, &msg); err != nil {
+			return
+		}
+		activeUsersMu.Lock()
+		activeUserIDs = msg.UserIDs
+		activeUsersMu.Unlock()
+	}); err != nil {
+		logger.Warn("nats: subscribe active-users failed", "error", err)
+	}
+
+	getActiveUserIDs := func() []int64 {
+		activeUsersMu.RLock()
+		defer activeUsersMu.RUnlock()
+		cp := make([]int64, len(activeUserIDs))
+		copy(cp, activeUserIDs)
+		return cp
+	}
+
 	// ── Scheduler ─────────────────────────────────────────────────────────────
 	sched := scheduler.New(logger)
 	sched.Register(
@@ -115,11 +141,52 @@ func main() {
 				}
 			},
 		},
+		// sync-live: lightweight sync (positions + balances) for users with active WS
 		scheduler.Job{
-			Name:     "sync-all-users",
-			Interval: 15 * time.Minute,
+			Name:     "sync-live",
+			Interval: cfg.SyncLiveInterval,
+			Fn: func(_ context.Context) {
+				ids := getActiveUserIDs()
+				if len(ids) == 0 {
+					return
+				}
+				logger.Debug("sync-live: starting", "users", len(ids))
+				var wg sync.WaitGroup
+				for _, id := range ids {
+					wg.Add(1)
+					go func(userID int64) {
+						defer wg.Done()
+						if err := syncService.SyncPositions(userID); err != nil {
+							logger.Error("sync-live: positions failed", "user_id", userID, "error", err)
+						}
+						if err := syncService.SyncBalances(userID); err != nil {
+							logger.Error("sync-live: balances failed", "user_id", userID, "error", err)
+						}
+						// Notify user via NATS → WS
+						_ = bus.Publish(natspkg.SubjPortfolioSynced, natspkg.PortfolioSyncedMsg{
+							UserID: userID,
+							Kind:   "live",
+						})
+					}(id)
+				}
+				wg.Wait()
+				logger.Debug("sync-live: done", "users", len(ids))
+			},
+		},
+		// sync-deep: full sync (history + spot trades) for ALL users with credentials
+		scheduler.Job{
+			Name:     "sync-deep",
+			Interval: cfg.SyncDeepInterval,
 			Fn: func(_ context.Context) {
 				syncService.SyncAllUsers()
+				// Notify each synced user
+				ids := getActiveUserIDs()
+				for _, id := range ids {
+					_ = bus.Publish(natspkg.SubjPortfolioSynced, natspkg.PortfolioSyncedMsg{
+						UserID: id,
+						Kind:   "deep",
+					})
+				}
 			},
 		},
 		scheduler.Job{

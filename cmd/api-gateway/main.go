@@ -11,6 +11,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"io"
 	"log/slog"
 	"net/http"
@@ -37,6 +38,7 @@ import (
 	"github.com/okochadmytro/tradetracker/internal/metrics"
 	"github.com/okochadmytro/tradetracker/internal/middleware"
 	"github.com/okochadmytro/tradetracker/internal/models"
+	natspkg "github.com/okochadmytro/tradetracker/internal/nats"
 	"github.com/okochadmytro/tradetracker/internal/services"
 	"github.com/okochadmytro/tradetracker/internal/ws"
 )
@@ -90,6 +92,46 @@ func main() {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	go wsServer.Run(ctx)
+
+	// ── NATS — heartbeat active users + listen for portfolio.synced ───────────
+	bus, err := natspkg.Connect(cfg.NatsURL, logger)
+	if err != nil {
+		logger.Error("NATS connection failed", "error", err)
+		os.Exit(1)
+	}
+	defer bus.Close()
+
+	// Publish active user IDs every 10 seconds so market-data knows who to sync frequently.
+	go func() {
+		ticker := time.NewTicker(10 * time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				ids := hub.ActiveUserIDs()
+				if err := bus.Publish(natspkg.SubjActiveUsers, natspkg.ActiveUsersMsg{
+					UserIDs: ids,
+					At:      time.Now(),
+				}); err != nil {
+					logger.Warn("nats: publish active-users failed", "error", err)
+				}
+			}
+		}
+	}()
+
+	// Subscribe to portfolio.synced — push {type:"synced"} to user's WS.
+	if _, err := bus.Subscribe(natspkg.SubjPortfolioSynced, func(data []byte) {
+		var msg natspkg.PortfolioSyncedMsg
+		if err := json.Unmarshal(data, &msg); err != nil {
+			return
+		}
+		payload, _ := json.Marshal(map[string]string{"type": "synced", "kind": msg.Kind})
+		hub.SendToUser(msg.UserID, payload)
+	}); err != nil {
+		logger.Warn("nats: subscribe portfolio.synced failed", "error", err)
+	}
 
 	// ── HTTP reverse-proxy helper ──────────────────────────────────────────────
 	proxyClient := &http.Client{Timeout: 30 * time.Second}

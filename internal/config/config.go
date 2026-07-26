@@ -4,6 +4,7 @@ import (
 	"log/slog"
 	"os"
 	"strconv"
+	"time"
 
 	"github.com/joho/godotenv"
 )
@@ -38,6 +39,10 @@ type Config struct {
 	MarketDataURL string
 	TradingURL    string
 	AnalyticsURL  string
+
+	// Sync intervals — market-data scheduler.
+	SyncLiveInterval time.Duration // lightweight sync for active WS users (positions+balances)
+	SyncDeepInterval time.Duration // full sync for all users (history+spot trades)
 }
 
 func Load() *Config {
@@ -68,6 +73,9 @@ func Load() *Config {
 		MarketDataURL: getEnv("MARKET_DATA_URL", "http://localhost:8081"),
 		TradingURL:    getEnv("TRADING_URL",     "http://localhost:8082"),
 		AnalyticsURL:  getEnv("ANALYTICS_URL",   "http://localhost:8083"),
+
+		SyncLiveInterval: getEnvDuration("SYNC_LIVE_INTERVAL", 45*time.Second),
+		SyncDeepInterval: getEnvDuration("SYNC_DEEP_INTERVAL", 15*time.Minute),
 	}
 }
 
@@ -88,4 +96,16 @@ func getEnvBool(key string, fallback bool) bool {
 		return fallback
 	}
 	return b
+}
+
+func getEnvDuration(key string, fallback time.Duration) time.Duration {
+	v := os.Getenv(key)
+	if v == "" {
+		return fallback
+	}
+	d, err := time.ParseDuration(v)
+	if err != nil {
+		return fallback
+	}
+	return d
 }

@@ -15,6 +15,14 @@ const (
 	// SubjPricesUpdated is published by market-data every 30 s after refreshing
 	// prices in Redis. Trading subscribes to trigger smart-order checks.
 	SubjPricesUpdated = "market.prices.updated"
+
+	// SubjActiveUsers is published by api-gateway with the list of user IDs
+	// that currently have an active WebSocket connection (heartbeat every 10 s).
+	SubjActiveUsers = "gateway.active-users"
+
+	// SubjPortfolioSynced is published by market-data after a successful
+	// live or deep sync for a specific user. api-gateway pushes it to WS.
+	SubjPortfolioSynced = "portfolio.synced"
 )
 
 // ─── Message types ────────────────────────────────────────────────────────────
@@ -23,6 +31,18 @@ const (
 type PricesMsg struct {
 	Prices map[string]float64 `json:"prices"`
 	At     time.Time          `json:"at"`
+}
+
+// ActiveUsersMsg carries the set of user IDs with active WS connections.
+type ActiveUsersMsg struct {
+	UserIDs []int64   `json:"user_ids"`
+	At      time.Time `json:"at"`
+}
+
+// PortfolioSyncedMsg notifies that a user's portfolio data was refreshed.
+type PortfolioSyncedMsg struct {
+	UserID int64  `json:"user_id"`
+	Kind   string `json:"kind"` // "live" or "deep"
 }
 
 // ─── Bus ──────────────────────────────────────────────────────────────────────
