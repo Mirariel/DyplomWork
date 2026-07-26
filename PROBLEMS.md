@@ -1363,6 +1363,57 @@ DELETE видаляє всі позиції цієї біржі. Те саме �
    `sync_exchange_errors_total{exchange, operation}`.
 4. Скопійовано патерн з `syncFuturesExchange` де cleanup вже був per-exchange.
 
+---
+
+## P-042 — Два паралельних конвеєри для позицій → 429 і розбіжність даних
+
+**Коли:** Фаза 18, дослідження причин 429 rate limit.
+
+**Проблема:**
+Два незалежних конвеєри синхронізували відкриті позиції:
+1. `sync-live` (market-data, 45 с) → `SyncPositions` → `open_positions`
+2. `futures-sync` (trading, 30 с) → `SyncFuturesAllUsers` → `futures_positions`
+
+Обидва викликали `GetOpenPositions()` для тих самих API-ключів. Ліміти бірж
+вигоряли удвічі швидше (OKX: 20 req/2s). Дані розходились — `futures_positions`
+не мала margin, margin_mode, trade_size, коментарі, і не отримувала жодних
+фіксів з P-038..P-041.
+
+**Рішення:**
+1. Видалено джобу `futures-sync` з `cmd/trading/main.go`.
+2. Ендпоінт `GET /api/futures/positions` переведено на читання з `open_positions`
+   (через `PortfolioRepository.GetOpenPositions`). Формат відповіді зберігається
+   ідентичним для фронтенду.
+3. `SyncFuturesForUser`, `SyncFuturesAllUsers`, `syncFuturesExchange` — видалено
+   з `sync_service.go`. `futuresRepo` більше не залежність SyncService.
+4. Таблиця `futures_positions` позначена deprecated — дроп буде окремою міграцією.
+
+---
+
+## P-043 — Маржа показує фактичну з доливом, а не початкову (notional/lev)
+
+**Коли:** Фаза 18, XAG-USD-SWAP показує margin=358.05 замість 45.68.
+
+**Проблема:**
+`p.Margin` з біржі — це фактична маржа рахунку, яка включає вільні кошти
+(для cross-margin) або долиту маржу (для isolated). Користувач хоче бачити
+**початкову** — суму, виділену при відкритті (notional_at_entry / leverage).
+
+Додатково, `transferMarginToHistory` перезаписувала обчислену початкову маржу
+більшою фактичною через умову `ph.margin < op.margin`.
+
+**Рішення:**
+1. `exchange.Position` і `ClosedTrade` — додано поле `NotionalEntryUsd`.
+2. OKX: `ctValFor()` метод з кешем 24 год. NotionalEntryUsd = |qty| × ctVal × entry.
+   Застосовується і до GetOpenPositions (раніше ctVal був тільки в GetClosedTrades).
+3. Binance / Bybit: NotionalEntryUsd = Quantity × EntryPrice.
+4. `processPositions`: margin = NotionalEntryUsd / leverage (замість p.Margin).
+5. `processHistory`: margin = NotionalEntryUsd / leverage (замість maxSize / leverage,
+   де maxSize обчислюється при close price і включає PnL).
+6. `transferMarginToHistory`: прибрана умова `ph.margin < op.margin`, лишено тільки
+   `ph.margin = 0` — не перезаписує вже обчислену маржу.
+7. P-035 закрито: ctVal тепер застосовується і до відкритих позицій.
+
 **Урок:**
 Ніколи не виконувати безумовний DELETE на основі timestamp після операції, яка може мовчки
 провалитись. Патерн "fetch → upsert → delete stale" вимагає що DELETE відбувається

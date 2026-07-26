@@ -407,7 +407,7 @@ if !ok {
 | `portfolio_snapshots` | trading | 000005 |
 | `dca_bots` | trading | 000006 |
 | `external_api_credentials` (label, api_key_hint) | trading | 000007 |
-| `futures_positions` | trading, market-data | 000008 |
+| `futures_positions` **(DEPRECATED — use open_positions)** | trading | 000008 |
 | `spot_trades` | market-data | 000009 |
 | `portfolio_snapshots` (snapshot_at DATETIME) | analytics | 000010 |
 | `portfolio_snapshots` (drop unique constraint) | analytics | 000011 |
