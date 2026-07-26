@@ -376,6 +376,7 @@ func (s *SyncService) processPositions(userID int64, positions []exchange.Positi
 			PnL:        p.PnL,
 			Leverage:   fmt.Sprintf("%dx", p.Leverage),
 			Margin:     margin,
+			TradeSize:  p.NotionalEntryUsd,
 		}
 		if err := s.repo.upsertPosition(row); err != nil {
 			s.logger.Error("sync: upsertPosition", "user_id", userID, "exchange", exchangeName, "symbol", p.Symbol, "error", err)

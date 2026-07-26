@@ -39,6 +39,10 @@ func (h *FuturesHandler) GetPositions(c *fiber.Ctx) error {
 		UnrealizedPnl float64 `json:"unrealized_pnl"`
 		Leverage      int     `json:"leverage"`
 		MarginType    string  `json:"margin_type"`
+		Margin        float64 `json:"margin"`
+		MarginMode    string  `json:"margin_mode"`
+		TradeSize     float64 `json:"trade_size"`
+		Quantity      float64 `json:"quantity"`
 		SyncedAt      string  `json:"synced_at"`
 	}
 
@@ -61,6 +65,10 @@ func (h *FuturesHandler) GetPositions(c *fiber.Ctx) error {
 			UnrealizedPnl: p.PnL,
 			Leverage:      lev,
 			MarginType:    p.MarginMode,
+			Margin:        p.Margin,
+			MarginMode:    p.MarginMode,
+			TradeSize:     p.TradeSize,
+			Quantity:      p.Quantity,
 			SyncedAt:      p.UpdatedAt.Format("2006-01-02T15:04:05Z"),
 		})
 		totalPnl += p.PnL

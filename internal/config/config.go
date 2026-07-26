@@ -74,7 +74,7 @@ func Load() *Config {
 		TradingURL:    getEnv("TRADING_URL",     "http://localhost:8082"),
 		AnalyticsURL:  getEnv("ANALYTICS_URL",   "http://localhost:8083"),
 
-		SyncLiveInterval: getEnvDuration("SYNC_LIVE_INTERVAL", 45*time.Second),
+		SyncLiveInterval: getEnvDuration("SYNC_LIVE_INTERVAL", 20*time.Second),
 		SyncDeepInterval: getEnvDuration("SYNC_DEEP_INTERVAL", 15*time.Minute),
 	}
 }

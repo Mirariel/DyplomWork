@@ -533,6 +533,10 @@ export interface FuturesPosition {
   unrealized_pnl: number
   leverage: number
   margin_type: string
+  margin: number
+  margin_mode: string
+  trade_size: number
+  quantity: number
   synced_at: string
 }
 
