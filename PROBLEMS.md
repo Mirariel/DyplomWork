@@ -1450,3 +1450,27 @@ ROI = `PnL / margin × 100`, де margin — початкова маржа (`not
 
 **Зачеплені файли:** `frontend/src/lib/format.ts`, `frontend/src/components/PositionsTable.tsx`,
 `frontend/src/pages/FuturesPositions.tsx`, `frontend/src/pages/Portfolio.tsx`
+
+---
+
+## P-045 — WS LivePosition: хардкод margin_mode, відсутні TradeSize/Margin
+
+**Коли:** Фаза 19 — уніфікація PositionsTable.
+
+**Проблема:**
+`internal/ws/server.go` побудова `LivePosition`:
+1. `MarginMode: "cross"` — хардкод замість читання `p.MarginType`
+2. `TradeSize` і `Margin` не заповнювались взагалі (нулі)
+
+Dashboard через WS показував усі позиції як "cross" і розмір/маржу = 0.
+
+**Рішення:**
+1. `MarginMode: p.MarginType` з фолбеком `"cross"` якщо порожньо
+2. `TradeSize: p.NotionalEntryUsd`
+3. `Margin: exchange.InitialMargin(p.NotionalEntryUsd, p.Leverage)`
+4. Формулу `notional / leverage` винесено у спільний хелпер
+   `exchange.InitialMargin()` — одна точка обчислення для processPositions,
+   processHistory і WS broadcast.
+
+**Зачеплені файли:** `internal/ws/server.go`, `internal/services/exchange/margin.go`,
+`internal/services/sync_service.go`
