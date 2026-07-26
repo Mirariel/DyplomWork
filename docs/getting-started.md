@@ -41,10 +41,17 @@ docker compose up --build -d
 
 ```bash
 # Корисні команди
-make docker-logs    # tail логів всіх сервісів
-make docker-down    # зупинити
-make docker-reset   # зупинити + видалити volumes (скидає БД)
+make docker-logs          # tail логів всіх сервісів
+make docker-down          # зупинити
+make docker-reset         # зупинити + видалити volumes (скидає БД)
+make frontend-redeploy    # перезібрати і оновити frontend (без depends_on)
+make backend-redeploy     # перезібрати і оновити всі Go-сервіси
 ```
+
+> **Важливо:** `docker compose up -d <сервіс>` тягне за собою `depends_on`.
+> Якщо сусідній сервіс не збирається, оновлення тихо не застосується.
+> Завжди використовуйте `make frontend-redeploy` / `make backend-redeploy`
+> для оновлення окремих сервісів (див. P-036).
 
 ---
 

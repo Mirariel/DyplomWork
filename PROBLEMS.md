@@ -1174,21 +1174,29 @@ cd frontend && npm run build
 # dist/ на диску оновлено, але контейнер nginx — ні
 ```
 
-**Рішення:**
-Після змін у frontend (або Go-коді) необхідно перезібрати Docker образи і перезапустити контейнери:
+**Пастка depends_on:**
+`docker compose up -d frontend` тягне за собою `depends_on: [api-gateway]`.
+Якщо збірка api-gateway падає, вся команда завершується помилкою — і frontend
+НЕ перестворюється, хоча образ новий. Симптом: образ актуальний, а в
+контейнері старий код. Помилку легко пропустити.
+
+**Як перевірити, який код реально роздається:**
 ```bash
-# Зібрати нові образи:
-docker compose build frontend market-data trading
-
-# Перезапустити контейнери:
-docker compose up -d frontend market-data trading
+docker compose exec frontend sh -c "grep -rl '<рядок з нового коду>' /usr/share/nginx/html"
+# Звірити ім'я файлу з тим, що вивела збірка (dist/assets/Dashboard-XXX.js)
 ```
-Після цього — hard refresh у браузері (`Ctrl+Shift+R`).
 
-**Урок:**
-При роботі з Docker Compose ніколи не плутати локальний build з build всередині контейнера. Зміни набирають чинності лише після `docker compose build <service>` + `docker compose up -d <service>`. Для швидкої розробки frontend — використовувати `npm run dev` (Vite dev server на :5173) без Docker, а збирати Docker образ тільки при релізі.
+**Рішення — Makefile-цілі з --no-deps:**
+```bash
+make frontend-redeploy   # збирає образ + force-recreate без depends_on
+make backend-redeploy    # те ж для api-gateway, market-data, trading, analytics
+```
+`--no-deps` гарантує, що падіння сусіднього сервісу не блокує оновлення.
 
-**Зачеплені файли:** `docker-compose.yml`, `frontend/Dockerfile`
+Для швидкої розробки frontend — використовувати `npm run dev` (Vite dev server
+на :5173) без Docker, а збирати Docker образ тільки при релізі.
+
+**Зачеплені файли:** `docker-compose.yml`, `frontend/Dockerfile`, `Makefile`
 
 ---
 
