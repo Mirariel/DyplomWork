@@ -177,15 +177,21 @@ func (s *Server) broadcastToUser(userID int64, spotPrices map[string]float64, sp
 					}
 					pnlPct = priceChange * float64(lev) * 100
 				}
+				marginMode := p.MarginType
+				if marginMode == "" {
+					marginMode = "cross"
+				}
 				live = append(live, LivePosition{
 					Symbol:     p.Symbol,
 					Side:       p.Side,
 					Exchange:   c.exchange,
-					MarginMode: "cross",
+					MarginMode: marginMode,
 					Leverage:   formatLeverage(p.Leverage),
 					EntryPrice: p.EntryPrice,
 					MarkPrice:  p.MarkPrice,
 					Quantity:   p.Quantity,
+					TradeSize:  p.NotionalEntryUsd,
+					Margin:     exchange.InitialMargin(p.NotionalEntryUsd, p.Leverage),
 					PnL:        p.PnL,
 					PnLPct:     roundFloat(pnlPct, 2),
 				})

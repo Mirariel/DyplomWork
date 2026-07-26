@@ -357,11 +357,7 @@ func (s *SyncService) processPositions(userID int64, positions []exchange.Positi
 			marginMode = "cross"
 		}
 
-		// Початкова маржа = notional_at_entry / leverage
-		margin := 0.0
-		if p.Leverage > 0 && p.NotionalEntryUsd > 0 {
-			margin = p.NotionalEntryUsd / float64(p.Leverage)
-		}
+		margin := exchange.InitialMargin(p.NotionalEntryUsd, p.Leverage)
 
 		row := positionRow{
 			UserID:     userID,
@@ -412,15 +408,11 @@ func (s *SyncService) processHistory(userID int64, trades []exchange.ClosedTrade
 			marginMode = "cross"
 		}
 
-		// Початкова маржа = notional_at_entry / leverage (не maxSize, який при close price)
-		var margin float64
 		notionalEntry := t.NotionalEntryUsd
 		if notionalEntry == 0 {
 			notionalEntry = t.Quantity * t.EntryPrice // fallback for non-OKX
 		}
-		if t.Leverage > 0 {
-			margin = notionalEntry / float64(t.Leverage)
-		}
+		margin := exchange.InitialMargin(notionalEntry, t.Leverage)
 
 		row := historyRow{
 			UserID:      userID,
