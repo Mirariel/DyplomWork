@@ -91,7 +91,6 @@ export default function PositionsTable({ rows, showComment, onRowClick, emptyTex
             <th className="text-left px-3 py-2">Exchange</th>
             <th className="text-center px-2 py-2">Side</th>
             <th className="text-right px-3 py-2">Size</th>
-            <th className="text-center px-2 py-2">Margin Type</th>
             <th className="text-right px-3 py-2">Entry</th>
             <th className="text-right px-3 py-2">Mark</th>
             <th className="text-right px-3 py-2">PnL</th>
@@ -132,11 +131,6 @@ export default function PositionsTable({ rows, showComment, onRowClick, emptyTex
                   {r.margin > 0 && (
                     <div className="text-[10px] text-slate-500">margin {fmtCompact(r.margin)}</div>
                   )}
-                </td>
-
-                {/* Margin Type */}
-                <td className="px-2 py-2 text-center text-xs text-slate-400 capitalize">
-                  {r.marginMode || '\u2014'}
                 </td>
 
                 {/* Entry */}
