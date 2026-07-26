@@ -94,6 +94,14 @@ func (b *Binance) GetOpenPositions(creds Credentials) ([]Position, error) {
 		if marginType == "" {
 			marginType = "cross"
 		}
+		margin := parseFloat(p.IsolatedMargin)
+		if margin == 0 {
+			notional := math.Abs(parseFloat(p.Notional))
+			lev := parseFloat(p.Leverage)
+			if lev > 0 {
+				margin = notional / lev
+			}
+		}
 		result = append(result, Position{
 			Symbol:     normalizeSymbol(p.Symbol),
 			Side:       side,
@@ -103,6 +111,7 @@ func (b *Binance) GetOpenPositions(creds Credentials) ([]Position, error) {
 			Leverage:   int(parseFloat(p.Leverage)),
 			PnL:        parseFloat(p.UnRealizedProfit),
 			MarginType: marginType,
+			Margin:     margin,
 		})
 	}
 	return result, nil

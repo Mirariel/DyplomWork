@@ -20,14 +20,16 @@ type Balance struct {
 
 // Position — відкрита ф'ючерсна/маржинальна позиція
 type Position struct {
-	Symbol     string
-	Side       string  // "LONG" | "SHORT"
-	Quantity   float64
-	EntryPrice float64
-	MarkPrice  float64
-	Leverage   int
-	PnL        float64
-	MarginType string  // "cross" | "isolated"
+	Symbol        string
+	Side          string  // "LONG" | "SHORT"
+	Quantity      float64
+	EntryPrice    float64
+	MarkPrice     float64
+	Leverage      int
+	PnL           float64
+	MarginType    string  // "cross" | "isolated"
+	Margin        float64 // реальна маржа з біржі (0 = невідомо, використати notional/leverage)
+	InitialMargin float64 // initial margin requirement (imr) з біржі
 }
 
 // ClosedTrade — закрита угода з PnL

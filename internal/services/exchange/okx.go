@@ -207,14 +207,16 @@ func (o *OKX) GetOpenPositions(creds Credentials) ([]Position, error) {
 			marginType = "cross"
 		}
 		result = append(result, Position{
-			Symbol:     normalizeSymbol(p.InstId),
-			Side:       side,
-			Quantity:   math.Abs(qty),
-			EntryPrice: parseFloat(p.AvgPx),
-			MarkPrice:  parseFloat(p.MarkPx),
-			Leverage:   int(parseFloat(p.Lever)),
-			PnL:        parseFloat(p.Upl),
-			MarginType: marginType,
+			Symbol:        normalizeSymbol(p.InstId),
+			Side:          side,
+			Quantity:      math.Abs(qty),
+			EntryPrice:    parseFloat(p.AvgPx),
+			MarkPrice:     parseFloat(p.MarkPx),
+			Leverage:      int(parseFloat(p.Lever)),
+			PnL:           parseFloat(p.Upl),
+			MarginType:    marginType,
+			Margin:        parseFloat(p.Margin),
+			InitialMargin: parseFloat(p.Imr),
 		})
 	}
 	return result, nil

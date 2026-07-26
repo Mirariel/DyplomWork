@@ -133,6 +133,7 @@ func (by *Bybit) GetOpenPositions(creds Credentials) ([]Position, error) {
 					Leverage      string `json:"leverage"`
 					TradeMode     int    `json:"tradeMode"`
 					LiqPrice      string `json:"liqPrice"`
+					PositionIM    string `json:"positionIM"`
 				} `json:"list"`
 			} `json:"result"`
 		}
@@ -163,6 +164,7 @@ func (by *Bybit) GetOpenPositions(creds Credentials) ([]Position, error) {
 				Leverage:   int(parseFloat(p.Leverage)),
 				PnL:        parseFloat(p.UnrealisedPnl),
 				MarginType: marginType,
+				Margin:     parseFloat(p.PositionIM),
 			})
 		}
 	}

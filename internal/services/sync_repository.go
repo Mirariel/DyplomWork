@@ -1,10 +1,19 @@
 package services
 
 import (
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/jmoiron/sqlx"
 )
+
+// parseLeverageStr converts "10x" → 10.0, "0x" → 0, invalid → 0.
+func parseLeverageStr(lev string) float64 {
+	s := strings.TrimSuffix(lev, "x")
+	v, _ := strconv.ParseFloat(s, 64)
+	return v
+}
 
 // syncRepository — всі DB-операції потрібні для синку.
 // Окремий тип щоб не змішувати з SyncService логікою.
@@ -53,10 +62,11 @@ func (r *syncRepository) upsertBalance(userID, assetID int64, exchange string, q
 }
 
 // deleteStaleBalances — видаляє записи, які не оновились під час поточного синку.
-func (r *syncRepository) deleteStaleBalances(userID int64, syncStart time.Time) error {
+// exchangeName фільтрує видалення лише для конкретної біржі.
+func (r *syncRepository) deleteStaleBalances(userID int64, exchangeName string, syncStart time.Time) error {
 	_, err := r.db.Exec(
-		"DELETE FROM user_portfolios WHERE user_id = ? AND updated_at < ?",
-		userID, syncStart,
+		"DELETE FROM user_portfolios WHERE user_id = ? AND exchange = ? AND updated_at < ?",
+		userID, exchangeName, syncStart,
 	)
 	return err
 }
@@ -90,18 +100,48 @@ func (r *syncRepository) upsertPosition(p positionRow) error {
 	return err
 }
 
+// transferMarginToHistory — перед видаленням stale позицій переносить останнє відоме
+// значення margin у position_history. Це єдине джерело правди про долиту маржу
+// для ізольованих позицій — positions-history API такого поля не має.
+func (r *syncRepository) transferMarginToHistory(userID int64, exchangeName string, syncStart time.Time) error {
+	_, err := r.db.Exec(`
+		UPDATE position_history ph
+		JOIN open_positions op
+		  ON op.user_id = ph.user_id
+		 AND op.symbol  = ph.symbol
+		 AND op.side    = ph.side
+		 AND op.exchange = ph.exchange
+		WHERE op.user_id = ?
+		  AND op.exchange = ?
+		  AND op.updated_at < ?
+		  AND op.margin > 0
+		  AND (ph.margin = 0 OR ph.margin < op.margin)
+		  AND ph.closed_at = (
+			SELECT MAX(ph2.closed_at)
+			FROM position_history ph2
+			WHERE ph2.user_id = ph.user_id
+			  AND ph2.symbol  = ph.symbol
+			  AND ph2.side    = ph.side
+			  AND ph2.exchange = ph.exchange
+		  )
+		SET ph.margin = op.margin
+	`, userID, exchangeName, syncStart)
+	return err
+}
+
 // deleteStalePositions — видаляє закриті позиції (не оновились під час синку).
-func (r *syncRepository) deleteStalePositions(userID int64, syncStart time.Time) error {
+// exchangeName фільтрує видалення лише для конкретної біржі.
+func (r *syncRepository) deleteStalePositions(userID int64, exchangeName string, syncStart time.Time) error {
 	_, err := r.db.Exec(
-		"DELETE FROM open_positions WHERE user_id = ? AND updated_at < ?",
-		userID, syncStart,
+		"DELETE FROM open_positions WHERE user_id = ? AND exchange = ? AND updated_at < ?",
+		userID, exchangeName, syncStart,
 	)
 	return err
 }
 
 // transferCommentsToHistory — копіює коментарі із відкритих позицій (що закриваються)
 // у відповідний найновіший запис в position_history.
-func (r *syncRepository) transferCommentsToHistory(userID int64, syncStart time.Time) error {
+func (r *syncRepository) transferCommentsToHistory(userID int64, exchangeName string, syncStart time.Time) error {
 	type stalePos struct {
 		Symbol   string `db:"symbol"`
 		Side     string `db:"side"`
@@ -112,8 +152,8 @@ func (r *syncRepository) transferCommentsToHistory(userID int64, syncStart time.
 	err := r.db.Select(&stale, `
 		SELECT symbol, side, exchange, comment
 		FROM open_positions
-		WHERE user_id = ? AND updated_at < ? AND comment IS NOT NULL AND comment != ''
-	`, userID, syncStart)
+		WHERE user_id = ? AND exchange = ? AND updated_at < ? AND comment IS NOT NULL AND comment != ''
+	`, userID, exchangeName, syncStart)
 	if err != nil || len(stale) == 0 {
 		return err
 	}
@@ -147,6 +187,15 @@ func (r *syncRepository) insertHistory(h historyRow) error {
 			h.Leverage = lev
 		}
 	}
+
+	// Перерахувати маржу після патчу leverage (BUG 2 fix)
+	if h.Margin == 0 {
+		lev := parseLeverageStr(h.Leverage)
+		if lev > 0 {
+			h.Margin = h.MaxSize / lev
+		}
+	}
+
 	_, err := r.db.NamedExec(`
 		INSERT INTO position_history
 			(user_id, symbol, side, leverage, margin_mode,
@@ -157,11 +206,12 @@ func (r *syncRepository) insertHistory(h historyRow) error {
 			 :entry_price, :exit_price, :quantity, :realized_pnl,
 			 :fee, :max_size, :margin, :opened_at, :closed_at, :exchange)
 		ON DUPLICATE KEY UPDATE
-			leverage   = IF(VALUES(leverage) != '0x', VALUES(leverage), leverage),
-			fee        = IF(VALUES(fee) > 0,          VALUES(fee),      fee),
-			margin     = IF(VALUES(margin) > 0,       VALUES(margin),   margin),
-			opened_at  = IF(opened_at IS NULL AND VALUES(opened_at) IS NOT NULL, VALUES(opened_at), opened_at),
-			max_size   = VALUES(max_size)
+			leverage    = IF(VALUES(leverage) != '0x', VALUES(leverage), leverage),
+			margin_mode = VALUES(margin_mode),
+			fee         = IF(VALUES(fee) > 0,          VALUES(fee),      fee),
+			margin      = IF(VALUES(margin) > 0,       VALUES(margin),   margin),
+			opened_at   = IF(opened_at IS NULL AND VALUES(opened_at) IS NOT NULL, VALUES(opened_at), opened_at),
+			max_size    = VALUES(max_size)
 	`, h)
 	return err
 }
