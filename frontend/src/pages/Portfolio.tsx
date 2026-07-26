@@ -14,19 +14,16 @@ import {
 } from '../api'
 import PriceChart from '../components/PriceChart'
 import ExchangeSelector from '../components/ExchangeSelector'
+import PositionsTable, { type PosRow } from '../components/PositionsTable'
+import StatsPanel from '../components/StatsPanel'
 import { isLong as isLongSide } from '../lib/side'
+import { fmt$ as fmt$Lib, fmtDate as fmtDateLib, fmtPct as fmtPctLib, parseLeverage, calcRoi } from '../lib/format'
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
-const fmt$ = (v: number) =>
-  `$${v.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
-
-const fmtDate = (iso: string | null | undefined) => {
-  if (!iso) return '—'
-  return new Date(iso).toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' })
-}
-
-const fmtPct = (v: number) => `${v >= 0 ? '+' : ''}${v.toFixed(2)}%`
+const fmt$ = fmt$Lib
+const fmtDate = fmtDateLib
+const fmtPct = fmtPctLib
 
 const ALL = 'all'
 const KNOWN_EXCHANGES = ['binance', 'okx', 'bybit', 'kucoin', 'gate', 'kraken']
@@ -51,11 +48,20 @@ function SideBadge({ side }: { side: string }) {
   )
 }
 
-function PnlCell({ value }: { value: number }) {
+function PnlCell({ pnl, margin }: { pnl: number; margin: number }) {
+  const roi = calcRoi(pnl, margin)
+  const positive = pnl >= 0
   return (
-    <span className={`font-medium ${value >= 0 ? 'text-green-400' : 'text-red-400'}`}>
-      {value >= 0 ? '+' : ''}{fmt$(value)}
-    </span>
+    <div>
+      <div className={`font-medium ${positive ? 'text-green-400' : 'text-red-400'}`}>
+        {positive ? '+' : ''}{fmt$(pnl)}
+      </div>
+      {roi != null && (
+        <div className={`text-[10px] ${positive ? 'text-green-500/70' : 'text-red-500/70'}`}>
+          {fmtPct(roi)}
+        </div>
+      )}
+    </div>
   )
 }
 
@@ -366,14 +372,21 @@ function BalancesTab({ selectedExchange }: { selectedExchange: string }) {
 
 function PositionsTab({ selectedExchange }: { selectedExchange: string }) {
   const qc = useQueryClient()
-  const { data, isLoading } = useQuery({ queryKey: ['portfolio'], queryFn: getPortfolio })
+  const { data, isLoading } = useQuery({ queryKey: ['portfolio'], queryFn: getPortfolio, refetchInterval: 10_000 })
   const positions: Position[] = data?.positions ?? []
 
   const [detail, setDetail] = useState<Position | null>(null)
+  const [draftExchange, setDraftExchange] = useState(selectedExchange)
+  const [appliedExchange, setAppliedExchange] = useState(selectedExchange)
 
-  const filtered = selectedExchange === ALL || !selectedExchange
+  const exchangeChanged = draftExchange !== appliedExchange
+
+  const applyExchange = () => setAppliedExchange(draftExchange)
+  const clearExchange = () => { setDraftExchange(''); setAppliedExchange('') }
+
+  const filtered = appliedExchange === ALL || !appliedExchange
     ? positions
-    : positions.filter((p) => p.exchange === selectedExchange)
+    : positions.filter((p) => p.exchange === appliedExchange)
 
   const totalPnl = filtered.reduce((s, p) => s + p.pnl, 0)
 
@@ -386,8 +399,21 @@ function PositionsTab({ selectedExchange }: { selectedExchange: string }) {
 
   return (
     <div>
-      {/* Header */}
-      <div className="flex items-center justify-end px-4 py-3 border-b border-slate-700">
+      {/* Header with GO filter */}
+      <div className="flex items-center justify-between px-4 py-3 border-b border-slate-700">
+        <div className="flex items-center gap-2">
+          <ExchangeSelector value={draftExchange} onChange={setDraftExchange} className="!py-1.5 !text-xs" />
+          <button onClick={applyExchange} disabled={!exchangeChanged}
+            className="px-3 py-1.5 text-xs font-semibold rounded-lg bg-blue-600 text-white hover:bg-blue-500 disabled:opacity-40 disabled:cursor-not-allowed transition-colors">
+            GO
+          </button>
+          {appliedExchange && (
+            <button onClick={clearExchange}
+              className="text-xs text-slate-500 hover:text-slate-300 p-1 rounded bg-slate-700">
+              <X size={11} />
+            </button>
+          )}
+        </div>
         <span className="text-sm text-slate-400">
           Total PnL:{' '}
           <span className={`font-semibold ${totalPnl >= 0 ? 'text-green-400' : 'text-red-400'}`}>
@@ -396,62 +422,43 @@ function PositionsTab({ selectedExchange }: { selectedExchange: string }) {
         </span>
       </div>
 
-      {filtered.length === 0 ? (
-        <p className="text-slate-500 text-sm p-6 text-center">No open positions found.</p>
-      ) : (
-        <div className="overflow-x-auto">
-          <table className="w-full text-sm">
-            <thead>
-              <tr className="text-xs text-slate-400 border-b border-slate-700">
-                {['Symbol', 'Exchange', 'Side', 'Size', 'Entry', 'Mark', 'PnL', 'Leverage', 'Comment'].map(
-                  (h) => <th key={h} className="px-4 py-3 text-left font-medium whitespace-nowrap">{h}</th>,
-                )}
-              </tr>
-            </thead>
-            <tbody>
-              {filtered.map((p) => (
-                <tr
-                  key={p.id}
-                  className="border-b border-slate-700/50 hover:bg-slate-700/40 transition-colors cursor-pointer"
-                  onClick={() => setDetail(p)}
-                >
-                  <td className="px-4 py-3 font-medium text-white">{p.symbol}</td>
-                  <td className="px-4 py-3 text-slate-300 capitalize">{p.exchange}</td>
-                  <td className="px-4 py-3"><SideBadge side={p.side} /></td>
-                  <td className="px-4 py-3 text-slate-300">{p.quantity}</td>
-                  <td className="px-4 py-3 text-slate-300">{fmt$(p.entry_price)}</td>
-                  <td className="px-4 py-3 text-slate-300">{fmt$(p.mark_price)}</td>
-                  <td className="px-4 py-3"><PnlCell value={p.pnl} /></td>
-                  <td className="px-4 py-3 text-slate-300">{p.leverage}</td>
-                  <td className="px-4 py-3" onClick={(e) => e.stopPropagation()}>
-                    <EditableComment
-                      value={p.comment ?? ''}
-                      onSave={(comment) =>
-                        commentMutation.mutateAsync({ id: p.id, comment }).then(() => undefined)
-                      }
-                    />
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      )}
+      <PositionsTable
+        rows={filtered.map((p) => ({
+          key: String(p.id),
+          symbol: p.symbol,
+          leverage: parseLeverage(p.leverage),
+          exchange: p.exchange,
+          side: p.side,
+          tradeSize: p.trade_size,
+          margin: p.margin,
+          marginMode: p.margin_mode,
+          entryPrice: p.entry_price,
+          markPrice: p.mark_price,
+          pnl: p.pnl,
+          comment: p.comment,
+          _position: p,
+        } as PosRow & { _position: Position }))}
+        showComment
+        onRowClick={(r) => setDetail((r as PosRow & { _position: Position })._position)}
+        commentRenderer={(r) => {
+          const p = (r as PosRow & { _position: Position })._position
+          return (
+            <EditableComment
+              value={p.comment ?? ''}
+              onSave={(comment) =>
+                commentMutation.mutateAsync({ id: p.id, comment }).then(() => undefined)
+              }
+            />
+          )
+        }}
+        emptyText="No open positions found."
+      />
 
       {detail && (
         <DetailModal item={detail} exchange={detail.exchange} onClose={() => setDetail(null)} />
       )}
     </div>
   )
-}
-
-// ─── Helpers ──────────────────────────────────────────────────────────────────
-
-// parseLeverage returns 0 for unknown ("0x", empty) and the actual value otherwise.
-function parseLeverage(lev: string): number {
-  if (!lev) return 0
-  const n = parseFloat(lev.replace('x', ''))
-  return isNaN(n) ? 0 : n
 }
 
 // ─── History tab ──────────────────────────────────────────────────────────────
@@ -588,7 +595,7 @@ function HistoryTab() {
                     <td className="px-4 py-3 text-slate-300">{marginModeLabel}</td>
                     <td className="px-4 py-3 text-slate-300">{fmt$(e.entry_price)}</td>
                     <td className="px-4 py-3 text-slate-300">{fmt$(e.exit_price)}</td>
-                    <td className="px-4 py-3"><PnlCell value={e.realized_pnl} /></td>
+                    <td className="px-4 py-3"><PnlCell pnl={e.realized_pnl} margin={e.margin} /></td>
                     <td className="px-4 py-3 text-slate-300 whitespace-nowrap">{fmtDate(e.closed_at)}</td>
                     <td className="px-4 py-3">
                       <EditableComment
@@ -623,101 +630,13 @@ function HistoryTab() {
       </div>
 
       {/* Analytics sidebar */}
-      <div className="w-56 flex-shrink-0 border-l border-slate-700 p-4 space-y-4">
-        <p className="text-xs text-slate-500 uppercase tracking-wide font-semibold">
-          {fromDate || toDate ? 'Статистика за період' : 'Загальна статистика'}
-        </p>
-
+      <div className="w-56 flex-shrink-0 border-l border-slate-700 p-4">
         {summary ? (
-          <>
-            {/* PnL */}
-            <div>
-              <p className="text-xs text-slate-500 mb-0.5">Загальний PnL</p>
-              <p className={`text-xl font-bold ${summary.total_realized_pnl >= 0 ? 'text-green-400' : 'text-red-400'}`}>
-                {summary.total_realized_pnl >= 0 ? '+' : ''}{fmt$(summary.total_realized_pnl)}
-              </p>
-            </div>
-
-            {/* Trade counts */}
-            <div className="space-y-1.5 text-xs">
-              <div className="flex justify-between">
-                <span className="text-slate-400">Угод</span>
-                <span className="text-white font-semibold">{summary.total_trades}</span>
-              </div>
-              <div className="flex justify-between">
-                <span className="text-slate-400">Прибуткових</span>
-                <span className="text-green-400 font-semibold">{summary.winning_trades}</span>
-              </div>
-              <div className="flex justify-between">
-                <span className="text-slate-400">Збиткових</span>
-                <span className="text-red-400 font-semibold">{summary.losing_trades}</span>
-              </div>
-            </div>
-
-            {/* Win rate bar */}
-            <div>
-              <div className="flex justify-between text-xs text-slate-500 mb-1">
-                <span>Win Rate</span>
-                <span className={`font-semibold ${summary.winrate >= 50 ? 'text-green-400' : 'text-red-400'}`}>
-                  {summary.winrate.toFixed(1)}%
-                </span>
-              </div>
-              <div className="h-1.5 bg-slate-700 rounded-full overflow-hidden">
-                <div className="h-full bg-green-500 rounded-full" style={{ width: `${Math.min(100, summary.winrate)}%` }} />
-              </div>
-            </div>
-
-            {/* Best / Worst / Avg */}
-            <div className="space-y-1.5 text-xs">
-              <div className="flex justify-between">
-                <span className="text-slate-400">Найкраща</span>
-                <span className="text-green-400 font-medium">+{fmt$(summary.best_trade)}</span>
-              </div>
-              <div className="flex justify-between">
-                <span className="text-slate-400">Найгірша</span>
-                <span className="text-red-400 font-medium">{fmt$(summary.worst_trade)}</span>
-              </div>
-              <div className="flex justify-between">
-                <span className="text-slate-400">Середня</span>
-                <span className={`font-medium ${summary.avg_pnl >= 0 ? 'text-green-400' : 'text-red-400'}`}>
-                  {summary.avg_pnl >= 0 ? '+' : ''}{fmt$(summary.avg_pnl)}
-                </span>
-              </div>
-            </div>
-
-            {/* R:R aggregate — avgWin / |avgLoss|, same formula as old project */}
-            <div className="bg-slate-700/50 rounded-lg p-3 space-y-1.5">
-              <p className="text-xs text-slate-400 font-medium">Risk / Reward</p>
-              {aggRR !== null ? (
-                <>
-                  <div className={`text-sm font-bold ${aggRR >= 1.5 ? 'text-green-400' : aggRR >= 1.0 ? 'text-yellow-400' : 'text-red-400'}`}>
-                    1 : {aggRR.toFixed(2)}
-                  </div>
-                  <p className={`text-xs ${aggRR >= 1.5 ? 'text-green-500' : aggRR >= 1.0 ? 'text-yellow-500' : 'text-red-400'}`}>
-                    {aggRR >= 1.5 ? 'Відмінне співвідношення' : aggRR >= 1.0 ? 'Прийнятне співвідношення' : 'Ризик перевищує прибуток'}
-                  </p>
-                </>
-              ) : (
-                <span className="text-slate-600 text-xs">—</span>
-              )}
-            </div>
-
-            {/* Fees + Profit Factor */}
-            <div className="space-y-1.5 text-xs">
-              {summary.total_fees > 0 && (
-                <div className="flex justify-between">
-                  <span className="text-slate-400">Комісії</span>
-                  <span className="text-slate-300 font-medium">-{fmt$(summary.total_fees)}</span>
-                </div>
-              )}
-              <div className="flex justify-between">
-                <span className="text-slate-400">Profit Factor</span>
-                <span className={`font-medium ${summary.profit_factor >= 1.5 ? 'text-green-400' : summary.profit_factor >= 1 ? 'text-yellow-400' : 'text-red-400'}`}>
-                  {summary.profit_factor.toFixed(2)}
-                </span>
-              </div>
-            </div>
-          </>
+          <StatsPanel
+            summary={summary}
+            aggRR={aggRR}
+            title={fromDate || toDate ? 'Статистика за період' : 'Загальна статистика'}
+          />
         ) : (
           <div className="text-xs text-slate-600">Завантаження…</div>
         )}

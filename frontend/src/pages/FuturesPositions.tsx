@@ -1,10 +1,13 @@
-import { useState } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { TrendingUp, TrendingDown, RefreshCw, ChevronLeft, ChevronRight, X } from 'lucide-react'
-import { getFuturesPositions, getHistory, getSummary, type FuturesPosition, type HistoryEntry, type TradeSummary } from '../api'
+import { RefreshCw, ChevronLeft, ChevronRight, X, BarChart3 } from 'lucide-react'
+import { getFuturesPositions, getHistory, getSummary, type FuturesPosition, type HistoryEntry } from '../api'
 import ExchangeSelector from '../components/ExchangeSelector'
+import PositionsTable from '../components/PositionsTable'
+import StatsPanel from '../components/StatsPanel'
 import { isLong } from '../lib/side'
-import { fmt$, fmtDate, parseLeverage, calcRR } from '../lib/format'
+import { fmt$, fmtDate, fmtPct, parseLeverage, calcRoi, calcRR } from '../lib/format'
+import { useAppliedFilter } from '../lib/useAppliedFilter'
 
 function fmt(n: number, decimals = 2) {
   return n.toLocaleString('en-US', { minimumFractionDigits: decimals, maximumFractionDigits: decimals })
@@ -16,18 +19,13 @@ function fmtPrice(n: number) {
   const abs = Math.abs(n)
   const dec = abs < 1 ? 6 : abs < 100 ? 4 : 2
   const s = n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: dec })
-  // Strip trailing zeros after decimal (keep at least "X.XX")
   return s.replace(/(\.\d{2}\d*?)0+$/, '$1')
 }
 
 const OPEN_PAGE_SIZE = 8
 const HISTORY_PAGE_SIZE = 10
 
-const EXCHANGE_ICONS: Record<string, string> = {
-  okx: 'OKX',
-  binance: 'BIN',
-  bybit: 'BYB',
-}
+const EXCHANGE_ICONS: Record<string, string> = { okx: 'OKX', binance: 'BIN', bybit: 'BYB' }
 
 function ExchangeIcon({ name }: { name: string }) {
   const label = EXCHANGE_ICONS[name.toLowerCase()] ?? name.slice(0, 3).toUpperCase()
@@ -44,8 +42,6 @@ function ExchangeIcon({ name }: { name: string }) {
   )
 }
 
-// ─── Shared UI ───────────────────────────────────────────────────────────────
-
 function SideBadge({ side }: { side: string }) {
   return (
     <span className={`inline-block px-2 py-0.5 rounded text-xs font-semibold ${
@@ -56,21 +52,26 @@ function SideBadge({ side }: { side: string }) {
   )
 }
 
-function PnlBadge({ value }: { value: number }) {
-  const positive = value >= 0
-  return (
-    <span className={`inline-flex items-center gap-1 font-medium ${positive ? 'text-green-400' : 'text-red-400'}`}>
-      {positive ? <TrendingUp size={14} /> : <TrendingDown size={14} />}
-      {positive ? '+' : ''}{fmt(value)}
-    </span>
-  )
+function padRows<T>(data: T[], size: number): (T | null)[] {
+  const result: (T | null)[] = [...data]
+  while (result.length < size) result.push(null)
+  return result
 }
 
-function PnlCell({ value }: { value: number }) {
+function PnlCell({ pnl, margin }: { pnl: number; margin: number }) {
+  const roi = calcRoi(pnl, margin)
+  const positive = pnl >= 0
   return (
-    <span className={`font-medium ${value >= 0 ? 'text-green-400' : 'text-red-400'}`}>
-      {value >= 0 ? '+' : ''}{fmt$(value)}
-    </span>
+    <div className="text-right">
+      <div className={`font-medium ${positive ? 'text-green-400' : 'text-red-400'}`}>
+        {positive ? '+' : ''}{fmt$(pnl)}
+      </div>
+      {roi != null && (
+        <div className={`text-[10px] ${positive ? 'text-green-500/70' : 'text-red-500/70'}`}>
+          {fmtPct(roi)}
+        </div>
+      )}
+    </div>
   )
 }
 
@@ -95,13 +96,6 @@ function Pagination({ page, totalPages, total, offset, limit, setOffset }: {
   )
 }
 
-// Generate array of `size` items, padding with nulls when data is shorter
-function padRows<T>(data: T[], size: number): (T | null)[] {
-  const result: (T | null)[] = [...data]
-  while (result.length < size) result.push(null)
-  return result
-}
-
 // ─── Open Positions Panel ────────────────────────────────────────────────────
 
 function OpenPositionsPanel() {
@@ -111,24 +105,34 @@ function OpenPositionsPanel() {
   const { data, isLoading, refetch, isFetching } = useQuery({
     queryKey: ['futures-positions', exchange],
     queryFn: () => getFuturesPositions(exchange || undefined),
-    refetchInterval: 30_000,
+    refetchInterval: 10_000,
   })
 
   const positions = data?.positions ?? []
   const totalPnl = data?.total_unrealized_pnl ?? 0
 
-  // Client-side pagination
   const total = positions.length
   const totalPages = Math.ceil(total / OPEN_PAGE_SIZE)
   const page = Math.floor(offset / OPEN_PAGE_SIZE) + 1
   const visible = positions.slice(offset, offset + OPEN_PAGE_SIZE)
-  const rows = padRows<FuturesPosition>(visible, OPEN_PAGE_SIZE)
+  const posRows = visible.map((p: FuturesPosition) => ({
+    key: String(p.id),
+    symbol: p.symbol,
+    leverage: p.leverage,
+    exchange: p.exchange,
+    side: p.side,
+    tradeSize: p.trade_size,
+    margin: p.margin,
+    marginMode: p.margin_mode ?? p.margin_type,
+    entryPrice: p.entry_price,
+    markPrice: p.mark_price,
+    pnl: p.unrealized_pnl,
+  }))
 
   const handleExchangeChange = (v: string) => { setExchange(v); setOffset(0) }
 
   return (
     <div className="bg-slate-800 rounded-xl border border-slate-700 flex flex-col">
-      {/* Header */}
       <div className="flex items-center justify-between px-4 py-3 border-b border-slate-700">
         <div className="flex items-center gap-3">
           <h2 className="text-sm font-semibold text-white">Open Positions</h2>
@@ -146,48 +150,14 @@ function OpenPositionsPanel() {
         </div>
       </div>
 
-      {/* Table */}
       <div className="flex-1">
-        <table className="w-full text-sm">
-          <thead>
-            <tr className="border-b border-slate-700 text-xs text-slate-400 uppercase tracking-wider">
-              <th className="text-left px-3 py-2">Symbol</th>
-              <th className="text-center px-2 py-2">Side</th>
-              <th className="text-right px-3 py-2">Size</th>
-              <th className="text-right px-3 py-2">Entry</th>
-              <th className="text-right px-3 py-2">Mark</th>
-              <th className="text-right px-3 py-2">PnL</th>
-              <th className="text-center px-2 py-2">Margin</th>
-            </tr>
-          </thead>
-          <tbody className="divide-y divide-slate-700/50">
-            {isLoading ? (
-              <tr><td colSpan={7} className="px-4 py-3 text-center">
-                <div className="w-5 h-5 border-2 border-blue-500 border-t-transparent rounded-full animate-spin mx-auto" />
-              </td></tr>
-            ) : rows.map((p, i) => p ? (
-              <tr key={p.id} className="hover:bg-slate-700/30 transition-colors">
-                <td className="px-3 py-2">
-                  <div className="flex items-center gap-1.5">
-                    <ExchangeIcon name={p.exchange} />
-                    <div>
-                      <div className="font-medium text-white text-sm leading-tight">{p.symbol}</div>
-                      <div className="text-[10px] text-slate-500">{p.leverage}x &middot; {p.margin_type}</div>
-                    </div>
-                  </div>
-                </td>
-                <td className="px-2 py-2 text-center"><SideBadge side={p.side} /></td>
-                <td className="px-3 py-2 text-right text-slate-200 text-xs">{fmt(p.size, 4)}</td>
-                <td className="px-3 py-2 text-right text-slate-200 text-xs">{fmtPrice(p.entry_price)}</td>
-                <td className="px-3 py-2 text-right text-slate-200 text-xs">{fmtPrice(p.mark_price)}</td>
-                <td className="px-3 py-2 text-right"><PnlBadge value={p.unrealized_pnl} /></td>
-                <td className="px-2 py-2 text-center text-xs text-slate-400 capitalize">{p.margin_type}</td>
-              </tr>
-            ) : (
-              <tr key={`empty-${i}`}><td colSpan={7} className="px-3 py-2">&nbsp;</td></tr>
-            ))}
-          </tbody>
-        </table>
+        {isLoading ? (
+          <div className="flex justify-center py-6">
+            <div className="w-5 h-5 border-2 border-blue-500 border-t-transparent rounded-full animate-spin" />
+          </div>
+        ) : (
+          <PositionsTable rows={posRows} />
+        )}
       </div>
 
       <Pagination page={page} totalPages={totalPages} total={total}
@@ -201,37 +171,38 @@ function OpenPositionsPanel() {
 function HistoryPanel() {
   const [exchange, setExchange] = useState('')
   const [offset, setOffset] = useState(0)
+  const [showStats, setShowStats] = useState(false)
+  const panelRef = useRef<HTMLDivElement>(null)
+  const { draft, applied, draftChanged, applyPreset, applyFilters: rawApply, clearFilters: rawClear, setFrom, setTo } = useAppliedFilter()
 
-  // Draft / applied pattern: query fires only on GO click
-  const [draft, setDraft] = useState({ from: '', to: '', preset: '' })
-  const [applied, setApplied] = useState({ from: '', to: '', preset: '' })
-
-  const draftChanged = draft.from !== applied.from || draft.to !== applied.to
-
-  const applyPreset = (label: string, days: number) => {
-    const to = new Date()
-    const from = new Date()
-    from.setDate(from.getDate() - (days - 1))
-    const fmt = (d: Date) => d.toISOString().slice(0, 10)
-    setDraft({ from: fmt(from), to: fmt(to), preset: label })
-  }
-
-  const applyFilters = () => {
-    setApplied({ ...draft })
-    setOffset(0)
-  }
-
-  const clearFilters = () => {
-    const empty = { from: '', to: '', preset: '' }
-    setDraft(empty)
-    setApplied(empty)
-    setOffset(0)
-  }
+  const applyFilters = () => { rawApply(); setOffset(0) }
+  const clearFilters = () => { rawClear(); setOffset(0) }
 
   const handleExchangeChange = (v: string) => {
     setExchange(v)
     setOffset(0)
   }
+
+  // Close stats panel on Escape
+  useEffect(() => {
+    if (!showStats) return
+    const handler = (e: KeyboardEvent) => { if (e.key === 'Escape') setShowStats(false) }
+    window.addEventListener('keydown', handler)
+    return () => window.removeEventListener('keydown', handler)
+  }, [showStats])
+
+  // Close stats panel on click outside
+  useEffect(() => {
+    if (!showStats) return
+    const handler = (e: MouseEvent) => {
+      if (panelRef.current && !panelRef.current.contains(e.target as Node)) {
+        setShowStats(false)
+      }
+    }
+    // Delay to avoid closing on the button click that opens it
+    const id = setTimeout(() => window.addEventListener('mousedown', handler), 0)
+    return () => { clearTimeout(id); window.removeEventListener('mousedown', handler) }
+  }, [showStats])
 
   const { data, isLoading } = useQuery({
     queryKey: ['futures-history', HISTORY_PAGE_SIZE, offset, applied.from, applied.to, exchange],
@@ -253,12 +224,25 @@ function HistoryPanel() {
   const aggRR = summary ? calcRR(summary) : null
 
   return (
-    <div className="bg-slate-800 rounded-xl border border-slate-700 flex flex-col">
+    <div className="bg-slate-800 rounded-xl border border-slate-700 flex flex-col relative">
       {/* Header with filters */}
       <div className="px-4 py-3 border-b border-slate-700 space-y-2">
         <div className="flex items-center justify-between">
           <h2 className="text-sm font-semibold text-white">Position History</h2>
-          <ExchangeSelector value={exchange} onChange={handleExchangeChange} className="!py-1.5 !text-xs" />
+          <div className="flex items-center gap-2">
+            <ExchangeSelector value={exchange} onChange={handleExchangeChange} className="!py-1.5 !text-xs" />
+            <button
+              onClick={() => setShowStats((v) => !v)}
+              className={`flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg transition-colors ${
+                showStats
+                  ? 'bg-blue-600 text-white'
+                  : 'bg-slate-700 text-slate-400 hover:bg-slate-600 hover:text-white'
+              }`}
+            >
+              <BarChart3 size={13} />
+              Statistics
+            </button>
+          </div>
         </div>
 
         {/* Period filter */}
@@ -278,11 +262,11 @@ function HistoryPanel() {
           ))}
           <span className="text-slate-700 text-xs">|</span>
           <input type="date" value={draft.from}
-            onChange={(e) => setDraft({ ...draft, from: e.target.value, preset: '' })}
+            onChange={(e) => setFrom(e.target.value)}
             className="text-xs bg-slate-700 border border-slate-600 text-slate-300 rounded-lg px-2 py-1 focus:outline-none focus:border-blue-500" />
           <span className="text-slate-600 text-xs">&mdash;</span>
           <input type="date" value={draft.to}
-            onChange={(e) => setDraft({ ...draft, to: e.target.value, preset: '' })}
+            onChange={(e) => setTo(e.target.value)}
             className="text-xs bg-slate-700 border border-slate-600 text-slate-300 rounded-lg px-2 py-1 focus:outline-none focus:border-blue-500" />
           <button onClick={applyFilters} disabled={!draftChanged}
             className="px-3 py-1 text-xs font-semibold rounded-lg bg-blue-600 text-white hover:bg-blue-500 disabled:opacity-40 disabled:cursor-not-allowed transition-colors">
@@ -298,9 +282,24 @@ function HistoryPanel() {
         </div>
       </div>
 
-      {/* Stats bar */}
-      {summary && (
-        <SummaryBar summary={summary} aggRR={aggRR} />
+      {/* Stats side panel */}
+      {showStats && summary && (
+        <div
+          ref={panelRef}
+          className="absolute right-0 top-0 h-full w-60 bg-slate-800 border-l border-slate-700 z-10 p-4 overflow-y-auto shadow-2xl"
+        >
+          <div className="flex items-center justify-between mb-3">
+            <span className="text-xs text-slate-400 font-semibold uppercase tracking-wide">Statistics</span>
+            <button onClick={() => setShowStats(false)} className="text-slate-500 hover:text-slate-300">
+              <X size={14} />
+            </button>
+          </div>
+          <StatsPanel
+            summary={summary}
+            aggRR={aggRR}
+            title={applied.from || applied.to ? 'За період' : 'Загальна'}
+          />
+        </div>
       )}
 
       {/* Table */}
@@ -342,7 +341,9 @@ function HistoryPanel() {
                 </td>
                 <td className="px-3 py-2 text-right text-slate-300 text-xs">{fmtPrice(e.entry_price)}</td>
                 <td className="px-3 py-2 text-right text-slate-300 text-xs">{fmtPrice(e.exit_price)}</td>
-                <td className="px-3 py-2 text-right"><PnlCell value={e.realized_pnl} /></td>
+                <td className="px-3 py-2 text-right">
+                  <PnlCell pnl={e.realized_pnl} margin={e.margin} />
+                </td>
                 <td className="px-3 py-2 text-slate-300 whitespace-nowrap text-xs">{fmtDate(e.closed_at)}</td>
               </tr>
             ) : (
@@ -354,59 +355,6 @@ function HistoryPanel() {
 
       <Pagination page={page} totalPages={totalPages} total={total}
         offset={offset} limit={HISTORY_PAGE_SIZE} setOffset={setOffset} />
-    </div>
-  )
-}
-
-// ─── Summary Stats Bar ───────────────────────────────────────────────────────
-
-function SummaryBar({ summary, aggRR }: { summary: TradeSummary; aggRR: number | null }) {
-  return (
-    <div className="flex items-center gap-6 px-4 py-2 border-b border-slate-700 text-xs flex-wrap">
-      <div>
-        <span className="text-slate-500">PnL </span>
-        <span className={`font-semibold ${summary.total_realized_pnl >= 0 ? 'text-green-400' : 'text-red-400'}`}>
-          {summary.total_realized_pnl >= 0 ? '+' : ''}{fmt$(summary.total_realized_pnl)}
-        </span>
-      </div>
-      <div>
-        <span className="text-slate-500">Trades </span>
-        <span className="text-white font-semibold">{summary.total_trades}</span>
-      </div>
-      <div>
-        <span className="text-slate-500">Win </span>
-        <span className={`font-semibold ${summary.winrate >= 50 ? 'text-green-400' : 'text-red-400'}`}>
-          {summary.winrate.toFixed(1)}%
-        </span>
-      </div>
-      <div>
-        <span className="text-slate-500">Avg W </span>
-        <span className="text-green-400 font-medium">+{fmt$(summary.avg_win)}</span>
-      </div>
-      <div>
-        <span className="text-slate-500">Avg L </span>
-        <span className="text-red-400 font-medium">{fmt$(summary.avg_loss)}</span>
-      </div>
-      {aggRR !== null && (
-        <div>
-          <span className="text-slate-500">R:R </span>
-          <span className={`font-semibold ${aggRR >= 1.5 ? 'text-green-400' : aggRR >= 1 ? 'text-yellow-400' : 'text-red-400'}`}>
-            1:{aggRR.toFixed(2)}
-          </span>
-        </div>
-      )}
-      {summary.total_fees > 0 && (
-        <div>
-          <span className="text-slate-500">Fees </span>
-          <span className="text-slate-300">-{fmt$(summary.total_fees)}</span>
-        </div>
-      )}
-      <div>
-        <span className="text-slate-500">PF </span>
-        <span className={`font-semibold ${summary.profit_factor >= 1.5 ? 'text-green-400' : summary.profit_factor >= 1 ? 'text-yellow-400' : 'text-red-400'}`}>
-          {summary.profit_factor.toFixed(2)}
-        </span>
-      </div>
     </div>
   )
 }

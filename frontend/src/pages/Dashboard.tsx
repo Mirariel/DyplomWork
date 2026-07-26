@@ -14,7 +14,8 @@ import { getSummary, getPortfolioChart, fullSync, getPortfolio, getTopSymbols, t
 import ExchangeSelector from '../components/ExchangeSelector'
 import { useWebSocket } from '../ws'
 import CoinModal from '../components/CoinModal'
-import { isLong } from '../lib/side'
+import PositionsTable from '../components/PositionsTable'
+import { parseLeverage } from '../lib/format'
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -460,72 +461,22 @@ export default function Dashboard() {
             )}
           </h2>
         </div>
-        {filteredPositions.length === 0 ? (
-          <p className="px-5 py-6 text-sm text-slate-500">No open positions.</p>
-        ) : (
-          <div className="overflow-x-auto">
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="text-xs text-slate-400 border-b border-slate-700">
-                  <th className="px-5 py-3 text-left font-medium">Symbol</th>
-                  <th className="px-5 py-3 text-left font-medium">Side</th>
-                  <th className="px-5 py-3 text-left font-medium">Exchange</th>
-                  <th className="px-5 py-3 text-right font-medium">Entry Price</th>
-                  <th className="px-5 py-3 text-right font-medium">Mark Price</th>
-                  <th className="px-5 py-3 text-right font-medium">PnL</th>
-                  <th className="px-5 py-3 text-right font-medium">PnL %</th>
-                </tr>
-              </thead>
-              <tbody>
-                {filteredPositions.map((p, i) => {
-                  const pos = p.pnl >= 0
-                  return (
-                    <tr
-                      key={`${p.symbol}-${p.exchange}-${i}`}
-                      className="border-b border-slate-700/50 hover:bg-slate-700/40 transition-colors"
-                    >
-                      <td className="px-5 py-3 font-medium text-white">{p.symbol}</td>
-                      <td className="px-5 py-3">
-                        <span
-                          className={`text-xs font-medium px-2 py-0.5 rounded-full ${
-                            isLong(p.side)
-                              ? 'bg-green-900/50 text-green-400'
-                              : 'bg-red-900/50 text-red-400'
-                          }`}
-                        >
-                          {p.side.toUpperCase()}
-                        </span>
-                      </td>
-                      <td className="px-5 py-3 text-slate-400 capitalize">{p.exchange}</td>
-                      <td className="px-5 py-3 text-right text-slate-300">
-                        {fmt$(p.entry_price)}
-                      </td>
-                      <td className="px-5 py-3 text-right text-slate-300">
-                        {fmt$(p.mark_price)}
-                      </td>
-                      <td
-                        className={`px-5 py-3 text-right font-medium ${
-                          pos ? 'text-green-400' : 'text-red-400'
-                        }`}
-                      >
-                        {pos ? '+' : ''}
-                        {fmt$(p.pnl)}
-                      </td>
-                      <td
-                        className={`px-5 py-3 text-right font-medium ${
-                          pos ? 'text-green-400' : 'text-red-400'
-                        }`}
-                      >
-                        {pos ? '+' : ''}
-                        {fmtPct(p.pnl_pct)}
-                      </td>
-                    </tr>
-                  )
-                })}
-              </tbody>
-            </table>
-          </div>
-        )}
+        <PositionsTable
+          rows={filteredPositions.map((p, i) => ({
+            key: `${p.symbol}-${p.exchange}-${i}`,
+            symbol: p.symbol,
+            leverage: parseLeverage(p.leverage),
+            exchange: p.exchange,
+            side: p.side,
+            tradeSize: p.trade_size,
+            margin: p.margin,
+            marginMode: p.margin_mode,
+            entryPrice: p.entry_price,
+            markPrice: p.mark_price,
+            pnl: p.pnl,
+            pnlPct: p.pnl_pct,
+          }))}
+        />
       </div>
 
       {/* Coin detail modal */}
