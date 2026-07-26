@@ -1,13 +1,16 @@
 package services
 
 import (
+	"errors"
 	"fmt"
 	"log/slog"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/jmoiron/sqlx"
+	"github.com/okochadmytro/tradetracker/internal/metrics"
 	"github.com/okochadmytro/tradetracker/internal/models"
 	"github.com/okochadmytro/tradetracker/internal/services/exchange"
 )
@@ -22,7 +25,14 @@ type SyncService struct {
 	futuresRepo   *models.FuturesPositionRepository
 	spotTradeRepo *models.SpotTradeRepository
 	logger        *slog.Logger
+
+	// 429 cooldown: exchange → time when cooldown expires
+	cooldownMu sync.RWMutex
+	cooldownAt map[string]time.Time
 }
+
+// cooldownDuration — скільки чекати після 429 перед наступною спробою
+const cooldownDuration = 5 * time.Minute
 
 func NewSyncService(db *sqlx.DB, enc *EncryptionService, logger *slog.Logger) *SyncService {
 	return &SyncService{
@@ -33,6 +43,52 @@ func NewSyncService(db *sqlx.DB, enc *EncryptionService, logger *slog.Logger) *S
 		futuresRepo:   models.NewFuturesPositionRepository(db),
 		spotTradeRepo: models.NewSpotTradeRepository(db),
 		logger:        logger,
+		cooldownAt:    make(map[string]time.Time),
+	}
+}
+
+// isOnCooldown повертає true якщо біржа в стані cooldown після 429.
+func (s *SyncService) isOnCooldown(exchangeName string) bool {
+	s.cooldownMu.RLock()
+	defer s.cooldownMu.RUnlock()
+	until, ok := s.cooldownAt[strings.ToLower(exchangeName)]
+	return ok && time.Now().Before(until)
+}
+
+// setCooldown встановлює cooldown для біржі.
+func (s *SyncService) setCooldown(exchangeName string) {
+	s.cooldownMu.Lock()
+	defer s.cooldownMu.Unlock()
+	s.cooldownAt[strings.ToLower(exchangeName)] = time.Now().Add(cooldownDuration)
+}
+
+// httpStatus витягує HTTP статус з помилки (або "unknown").
+func httpStatus(err error) string {
+	var apiErr *exchange.APIError
+	if errors.As(err, &apiErr) {
+		return strconv.Itoa(apiErr.StatusCode)
+	}
+	return "unknown"
+}
+
+// logSyncError логує помилку синхронізації зі структурованим HTTP-статусом
+// і встановлює cooldown при 429.
+func (s *SyncService) logSyncError(err error, exchangeName, operation string, userID int64) {
+	status := httpStatus(err)
+	s.logger.Error("sync: API error",
+		"user_id", userID,
+		"exchange", exchangeName,
+		"operation", operation,
+		"http_status", status,
+		"error", err,
+	)
+	metrics.SyncExchangeErrors.WithLabelValues(exchangeName, operation, status).Inc()
+
+	var apiErr *exchange.APIError
+	if errors.As(err, &apiErr) && apiErr.StatusCode == 429 {
+		s.setCooldown(exchangeName)
+		s.logger.Warn("sync: 429 rate limit, exchange on cooldown",
+			"exchange", exchangeName, "cooldown", cooldownDuration)
 	}
 }
 
@@ -61,7 +117,7 @@ func (s *SyncService) SyncUser(userID int64) error {
 			start := time.Now()
 			s.logger.Info("sync: starting full sync", "user_id", userID, "exchange", c.cred.Exchange)
 
-			if err := s.syncExchangeFull(userID, c); err != nil {
+			if err := s.syncExchangeFull(userID, c, syncStart); err != nil {
 				s.logger.Error("sync: exchange error", "user_id", userID, "exchange", c.cred.Exchange, "error", err)
 				errMsg := err.Error()
 				s.repo.updateSyncStatus(c.cred.ID, &errMsg)
@@ -74,10 +130,6 @@ func (s *SyncService) SyncUser(userID int64) error {
 	}
 	wg.Wait()
 
-	// Пост-обробка (послідовно, після завершення всіх goroutine)
-	s.repo.transferCommentsToHistory(userID, syncStart)
-	s.repo.deleteStalePositions(userID, syncStart)
-	s.repo.deleteStaleBalances(userID, syncStart)
 	s.repo.updateAverageBuyPrices(userID)
 
 	return nil
@@ -118,6 +170,10 @@ func (s *SyncService) SyncPositions(userID int64) error {
 		wg.Add(1)
 		go func(c credWithKeys) {
 			defer wg.Done()
+			if s.isOnCooldown(c.cred.Exchange) {
+				s.logger.Debug("sync: skipping (429 cooldown)", "exchange", c.cred.Exchange)
+				return
+			}
 			ex := s.getExchange(c.cred.Exchange)
 			if ex == nil {
 				return
@@ -126,17 +182,22 @@ func (s *SyncService) SyncPositions(userID int64) error {
 			// Спочатку history щоб коментар мав куди перейти
 			if trades, err := ex.GetClosedTrades(c.creds, start3d.UnixMilli(), now.UnixMilli()); err == nil {
 				s.processHistory(userID, trades, c.cred.Exchange)
+			} else {
+				s.logSyncError(err, c.cred.Exchange, "closed_trades", userID)
 			}
 
 			if positions, err := ex.GetOpenPositions(c.creds); err == nil {
 				s.processPositions(userID, positions, c.cred.Exchange)
+				// Stale cleanup тільки після успішного отримання позицій цієї біржі
+				s.repo.transferCommentsToHistory(userID, c.cred.Exchange, syncStart)
+				s.repo.transferMarginToHistory(userID, c.cred.Exchange, syncStart)
+				s.repo.deleteStalePositions(userID, c.cred.Exchange, syncStart)
+			} else {
+				s.logSyncError(err, c.cred.Exchange, "positions", userID)
 			}
 		}(c)
 	}
 	wg.Wait()
-
-	s.repo.transferCommentsToHistory(userID, syncStart)
-	s.repo.deleteStalePositions(userID, syncStart)
 	return nil
 }
 
@@ -154,18 +215,23 @@ func (s *SyncService) SyncBalances(userID int64) error {
 		wg.Add(1)
 		go func(c credWithKeys) {
 			defer wg.Done()
+			if s.isOnCooldown(c.cred.Exchange) {
+				s.logger.Debug("sync: skipping balances (429 cooldown)", "exchange", c.cred.Exchange)
+				return
+			}
 			ex := s.getExchange(c.cred.Exchange)
 			if ex == nil {
 				return
 			}
 			if balances, err := ex.GetBalances(c.creds); err == nil {
 				s.processBalances(userID, balances, c.cred.Exchange)
+				s.repo.deleteStaleBalances(userID, c.cred.Exchange, syncStart)
+			} else {
+				s.logSyncError(err, c.cred.Exchange, "balances", userID)
 			}
 		}(c)
 	}
 	wg.Wait()
-
-	s.repo.deleteStaleBalances(userID, syncStart)
 	return nil
 }
 
@@ -191,7 +257,7 @@ func (s *SyncService) SyncRecentHistory(userID int64, days int) error {
 			}
 			trades, err := ex.GetClosedTrades(c.creds, startMs, endMs)
 			if err != nil {
-				s.logger.Error("sync: history error", "exchange", c.cred.Exchange, "error", err)
+				s.logSyncError(err, c.cred.Exchange, "closed_trades", userID)
 				return
 			}
 			s.processHistory(userID, trades, c.cred.Exchange)
@@ -248,7 +314,7 @@ func (s *SyncService) syncFuturesExchange(userID int64, c credWithKeys) {
 
 	positions, err := ex.GetOpenPositions(c.creds)
 	if err != nil {
-		s.logger.Error("futures sync: get positions", "exchange", c.cred.Exchange, "error", err)
+		s.logSyncError(err, c.cred.Exchange, "futures_positions", userID)
 		return
 	}
 
@@ -288,7 +354,7 @@ func (s *SyncService) syncFuturesExchange(userID int64, c credWithKeys) {
 
 // --- internal ---
 
-func (s *SyncService) syncExchangeFull(userID int64, c credWithKeys) error {
+func (s *SyncService) syncExchangeFull(userID int64, c credWithKeys, syncStart time.Time) error {
 	ex := s.getExchange(c.cred.Exchange)
 	if ex == nil {
 		return fmt.Errorf("unknown exchange: %s", c.cred.Exchange)
@@ -298,26 +364,29 @@ func (s *SyncService) syncExchangeFull(userID int64, c credWithKeys) error {
 	startMs := now.Add(-90 * 24 * time.Hour).UnixMilli()
 
 	// Всі 4 операції послідовно в межах одного exchange (API rate limits)
-	balances, err := ex.GetBalances(c.creds)
-	if err != nil {
-		s.logger.Error("sync: balances error", "user_id", userID, "exchange", c.cred.Exchange, "operation", "balances", "error", err)
-		return err
+	balancesOk := false
+	if balances, err := ex.GetBalances(c.creds); err == nil {
+		s.processBalances(userID, balances, c.cred.Exchange)
+		s.logger.Info("sync: balances ok", "user_id", userID, "exchange", c.cred.Exchange, "count", len(balances))
+		balancesOk = true
+	} else {
+		s.logSyncError(err, c.cred.Exchange, "balances", userID)
 	}
-	s.processBalances(userID, balances, c.cred.Exchange)
-	s.logger.Info("sync: balances ok", "user_id", userID, "exchange", c.cred.Exchange, "count", len(balances))
 
+	positionsOk := false
 	if positions, err := ex.GetOpenPositions(c.creds); err == nil {
 		s.processPositions(userID, positions, c.cred.Exchange)
 		s.logger.Info("sync: positions ok", "user_id", userID, "exchange", c.cred.Exchange, "count", len(positions))
+		positionsOk = true
 	} else {
-		s.logger.Error("sync: positions error", "user_id", userID, "exchange", c.cred.Exchange, "error", err)
+		s.logSyncError(err, c.cred.Exchange, "positions", userID)
 	}
 
 	if trades, err := ex.GetClosedTrades(c.creds, startMs, now.UnixMilli()); err == nil {
 		s.processHistory(userID, trades, c.cred.Exchange)
 		s.logger.Info("sync: history ok", "user_id", userID, "exchange", c.cred.Exchange, "count", len(trades))
 	} else {
-		s.logger.Error("sync: history error", "user_id", userID, "exchange", c.cred.Exchange, "error", err)
+		s.logSyncError(err, c.cred.Exchange, "closed_trades", userID)
 	}
 
 	// Spot trades (optional — only if exchange implements SpotTrader)
@@ -325,8 +394,18 @@ func (s *SyncService) syncExchangeFull(userID int64, c credWithKeys) error {
 		if spotTrades, err := st.GetRecentTrades(c.creds, startMs, now.UnixMilli()); err == nil {
 			s.processSpotTrades(userID, spotTrades, c.cred.Exchange)
 		} else {
-			s.logger.Error("sync: spot trades error", "user_id", userID, "exchange", c.cred.Exchange, "error", err)
+			s.logSyncError(err, c.cred.Exchange, "spot_trades", userID)
 		}
+	}
+
+	// Stale cleanup per-exchange: тільки для успішно отриманих даних
+	if positionsOk {
+		s.repo.transferCommentsToHistory(userID, c.cred.Exchange, syncStart)
+		s.repo.transferMarginToHistory(userID, c.cred.Exchange, syncStart)
+		s.repo.deleteStalePositions(userID, c.cred.Exchange, syncStart)
+	}
+	if balancesOk {
+		s.repo.deleteStaleBalances(userID, c.cred.Exchange, syncStart)
 	}
 
 	return nil
@@ -365,6 +444,13 @@ func (s *SyncService) processPositions(userID int64, positions []exchange.Positi
 			marginMode = "cross"
 		}
 
+		// Маржа: спочатку реальне значення з біржі, фолбек — notional/leverage
+		margin := p.Margin
+		if margin == 0 && p.Leverage > 0 {
+			notional := p.Quantity * p.EntryPrice
+			margin = notional / float64(p.Leverage)
+		}
+
 		row := positionRow{
 			UserID:     userID,
 			AssetID:    assetID,
@@ -377,6 +463,7 @@ func (s *SyncService) processPositions(userID int64, positions []exchange.Positi
 			Quantity:   p.Quantity,
 			PnL:        p.PnL,
 			Leverage:   fmt.Sprintf("%dx", p.Leverage),
+			Margin:     margin,
 		}
 		if err := s.repo.upsertPosition(row); err != nil {
 			s.logger.Error("sync: upsertPosition", "user_id", userID, "exchange", exchangeName, "symbol", p.Symbol, "error", err)

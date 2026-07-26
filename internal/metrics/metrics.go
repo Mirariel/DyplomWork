@@ -46,6 +46,12 @@ var (
 		Help: "Number of active smart orders (not yet triggered or cancelled).",
 	})
 
+	// Exchange sync errors
+	SyncExchangeErrors = promauto.NewCounterVec(prometheus.CounterOpts{
+		Name: "sync_exchange_errors_total",
+		Help: "Total number of exchange sync errors by exchange, operation and HTTP status.",
+	}, []string{"exchange", "operation", "status"})
+
 	// Scheduler
 	SchedulerJobDuration = promauto.NewHistogramVec(prometheus.HistogramOpts{
 		Name:    "scheduler_job_duration_seconds",

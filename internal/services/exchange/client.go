@@ -15,6 +15,16 @@ var httpClient = &http.Client{Timeout: 15 * time.Second}
 // retryDelays — exponential backoff при HTTP 429
 var retryDelays = []time.Duration{time.Second, 2 * time.Second, 4 * time.Second}
 
+// APIError — структурована помилка з HTTP-статусом і тілом відповіді.
+type APIError struct {
+	StatusCode int
+	Body       string
+}
+
+func (e *APIError) Error() string {
+	return fmt.Sprintf("API error %d: %s", e.StatusCode, e.Body)
+}
+
 // doRequest виконує запит через фабрику (для коректного retry без читання body двічі).
 // dest — вказівник на структуру для json.Unmarshal.
 func doRequest(buildReq func() (*http.Request, error), dest interface{}) error {
@@ -45,7 +55,7 @@ func doRequest(buildReq func() (*http.Request, error), dest interface{}) error {
 		}
 
 		if resp.StatusCode >= 400 {
-			return fmt.Errorf("API error %d: %s", resp.StatusCode, string(body))
+			return &APIError{StatusCode: resp.StatusCode, Body: string(body)}
 		}
 
 		return json.Unmarshal(body, dest)
